@@ -1,0 +1,18 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "service::unit_file(Path::new(\"/home/ana/.local/bin/pocketgpu\"))"
+---
+[Unit]
+Description=PocketGPU agent
+Documentation=https://pocketgpu.app/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart="/home/ana/.local/bin/pocketgpu" agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

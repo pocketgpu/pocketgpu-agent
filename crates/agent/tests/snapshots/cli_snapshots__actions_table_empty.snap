@@ -1,0 +1,5 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "actions::render(&[])"
+---
+No actions yet. Add one with: pgpu actions add "Name" -- <command>

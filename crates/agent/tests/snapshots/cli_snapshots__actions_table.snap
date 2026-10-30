@@ -1,0 +1,7 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "actions::render(&list)"
+---
+ ID  NAME                     RISKY TIMEOUT  COMMAND
+  1  Restart vLLM             yes       60s  systemctl --user restart vllm
+  2  Disk usage                        600s  df -h /data

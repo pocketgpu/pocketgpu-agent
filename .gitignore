@@ -1,0 +1,4 @@
+/target
+/crates/proto/fuzz/target
+/crates/proto/fuzz/corpus
+/crates/proto/fuzz/artifacts

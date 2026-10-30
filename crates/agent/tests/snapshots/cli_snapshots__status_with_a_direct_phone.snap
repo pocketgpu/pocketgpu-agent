@@ -1,0 +1,8 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "status::render(&status_fixture(1, 1, 1))"
+---
+Agent       running · direct to 1 device
+Machine     rig-1 (a91c…a91c)
+GPU 0       RTX 4090 · 87% · 18.2/24 GB · 71°C · 380 W
+Ollama      running

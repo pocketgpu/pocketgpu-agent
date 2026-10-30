@@ -1,0 +1,9 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "audit::render(&entries, now)"
+---
+    WHEN  DEVICE           EVENT             TARGET                   RESULT
+just now  Pixel 9          action_run        #1 Restart vLLM          exit 0
+  5m ago  Pixel 9          kill              pid 48213                sigterm sent
+  3h ago  a91c40de…        refused           CreateAction x           needs shell permission
+  2d ago  local            action_create     #1 Restart vLLM          ok

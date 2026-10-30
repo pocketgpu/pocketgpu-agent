@@ -1,0 +1,33 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "status::to_json(&status_fixture(2, 2, 1))"
+---
+{
+  "agent": {
+    "id": "a91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91ca91c",
+    "name": "rig-1",
+    "running": true,
+    "version": "0.1.0"
+  },
+  "connection": {
+    "connected": 2,
+    "direct": 1,
+    "paired": 2
+  },
+  "gpu_problem": null,
+  "gpus": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 4090",
+      "power_w": 380,
+      "temp_c": 71,
+      "util_pct": 87,
+      "vram_total_mb": 24564,
+      "vram_used_mb": 18636
+    }
+  ],
+  "jobs_running": 0,
+  "ollama": {
+    "running": true
+  }
+}

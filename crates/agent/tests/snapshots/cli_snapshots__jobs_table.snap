@@ -1,0 +1,8 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "jobs::render(&list, now)"
+---
+ JOB  STATE     NAME                          TIME  EXIT
+  14  running   train.py                    1h 02m  
+  13  crashed   eval.py                     3m 20s  1
+  12  finished  next.sh                     2h 14m  0

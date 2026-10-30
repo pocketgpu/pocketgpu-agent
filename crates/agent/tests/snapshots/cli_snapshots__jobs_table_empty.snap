@@ -1,0 +1,5 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "jobs::render(&[], now)"
+---
+No jobs yet. Start one with: pgpu run -- <command>

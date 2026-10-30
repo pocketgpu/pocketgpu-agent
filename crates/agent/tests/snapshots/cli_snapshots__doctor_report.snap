@@ -1,0 +1,9 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "doctor::render(&checks)"
+---
+✓ User        not root
+✗ Agent       not running. Start it with `pgpu service install`
+✓ Network     direct connections possible
+
+1 check failed.

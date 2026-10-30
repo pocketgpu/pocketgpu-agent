@@ -1,0 +1,7 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "devices::render(&list, now)"
+---
+NAME                 PLATFORM PERMISSION KEY       LAST SEEN
+Pixel 9              android  shell      a91c40de  now          connected
+iPhone               ios      view       7f3a9c1b  3h ago

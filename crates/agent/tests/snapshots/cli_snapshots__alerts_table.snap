@@ -1,0 +1,10 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "alerts::render(&rules)"
+---
+job-end      on                 
+gpu-temp     on   85 °C         Pro
+disk-full    on   90 %          Pro
+offline      on   5 minutes     Pro
+ollama-down  off                Pro
+generic-text off

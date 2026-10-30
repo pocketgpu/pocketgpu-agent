@@ -1,0 +1,4 @@
+# Windows dev machines: the LLVM linker that ships with Rust links much faster than
+# link.exe. Linux already uses lld by default.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

@@ -1,0 +1,8 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "status::render(&s)"
+---
+Agent       running · no phones paired yet · run `pgpu pair`
+Machine     rig-1 (a91c…a91c)
+GPU         none · the NVIDIA driver is not installed
+Ollama      not checked yet

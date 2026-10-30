@@ -1,0 +1,5 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+expression: "devices::render(&[], now)"
+---
+No paired phones. Pair one with: pgpu pair
