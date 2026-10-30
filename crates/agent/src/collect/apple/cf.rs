@@ -45,7 +45,9 @@ pub struct Cf(pub CFTypeRef);
 impl Cf {
     /// `None` for a null result.
     pub fn new(r: CFTypeRef) -> Option<Self> {
-        (!r.is_null()).then_some(Self(r))
+        // Not `then_some(Self(r))`: that builds the value first, so a null result was dropped
+        // and CFRelease(NULL) crashed the agent.
+        if r.is_null() { None } else { Some(Self(r)) }
     }
 }
 
@@ -235,4 +237,20 @@ pub fn sysctl_u64(name: &str) -> Option<u64> {
         )
     };
     (rc == 0 && len == size_of::<u64>()).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Apple APIs return null for anything missing; that must be `None`, not a crash.
+    #[test]
+    fn null_is_none_and_never_released() {
+        assert!(Cf::new(std::ptr::null()).is_none());
+        let missing = services("IOAccelerator")
+            .into_iter()
+            .next()
+            .and_then(|gpu| gpu.property("no-such-property"));
+        assert!(missing.is_none());
+    }
 }

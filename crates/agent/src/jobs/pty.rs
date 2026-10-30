@@ -156,9 +156,16 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "test -t 1 && echo tty || echo pipe"]);
         let (mut child, mut master) = pty.spawn(cmd).unwrap();
+        // Read before waiting: on macOS a program's exit waits until its terminal output has
+        // been read, so waiting first never returns (pgpu run reads all along).
+        let mut out = Vec::new();
+        let mut buf = [0u8; 64];
+        while !out.contains(&b'\n') {
+            let n = master.read(&mut buf).unwrap();
+            assert!(n > 0, "the terminal closed before the answer");
+            out.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "tty");
         assert!(child.wait().unwrap().success());
-        let mut out = vec![0u8; 64];
-        let n = master.read(&mut out).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out[..n]).trim(), "tty");
     }
 }
