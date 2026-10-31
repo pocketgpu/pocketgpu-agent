@@ -94,6 +94,12 @@ pub enum Request {
     SetDocker {
         on: bool,
     },
+    /// A short note to the paired phones and alert channels, like a job alert (`pgpu mcp`'s
+    /// notify tool). Replies `Notified`.
+    Notify {
+        title: String,
+        body: String,
+    },
 }
 
 /// Where the agent sends alerts besides the push server (F20).
@@ -204,6 +210,13 @@ pub enum Response {
         enabled: bool,
         /// Containers Docker reports, or why it can't be reached.
         containers: Result<u32, String>,
+    },
+    /// How a `Notify` went: phones the push server delivered to, and alert channels that
+    /// took it. `held` when alerts are paused or job alerts are off.
+    Notified {
+        phones: u32,
+        channels: u32,
+        held: bool,
     },
 }
 

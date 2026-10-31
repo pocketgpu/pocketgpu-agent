@@ -13,6 +13,7 @@ pub mod devices;
 pub mod docker;
 pub mod doctor;
 pub mod jobs;
+pub mod mcp;
 pub mod notify;
 mod pair;
 pub mod relay;
@@ -111,6 +112,9 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<notify::Action>,
     },
+    /// An MCP server on stdin and stdout for AI agents on this machine (Claude Code, Codex,
+    /// Gemini CLI): GPU status, jobs and their output, and notes to your phone.
+    Mcp,
     /// Your own iroh-relay: show (the default), set <url>, clear.
     Relay {
         #[command(subcommand)]
@@ -225,6 +229,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Shell { action } => shell::run(&paths, cli.json, *action).await,
         Command::Docker { action } => docker::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
+        Command::Mcp => mcp::run(&paths).await,
         Command::Relay { action } => relay::run(&paths, cli.json, action.clone()).await,
         Command::Update { check, version } => {
             update::run(cli.json, *check, version.as_deref()).await

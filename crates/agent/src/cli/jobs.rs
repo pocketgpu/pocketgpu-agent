@@ -49,7 +49,7 @@ pub fn render(jobs: &[JobSummary], now_ms: u64) -> String {
     out
 }
 
-fn state_label(s: JobState) -> &'static str {
+pub(crate) fn state_label(s: JobState) -> &'static str {
     match s {
         JobState::Running => "running",
         JobState::Finished => "finished",

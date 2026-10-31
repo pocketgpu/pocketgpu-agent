@@ -61,6 +61,20 @@ where
                 }
                 continue;
             }
+            Request::Notify { title, body } => {
+                let reply = match crate::alerts::sender::send_note(&agent, &title, &body).await {
+                    Ok((phones, channels, held)) => Response::Notified {
+                        phones,
+                        channels,
+                        held,
+                    },
+                    Err(e) => Response::Error(format!("{e:#}")),
+                };
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::TestChannels => {
                 let alert = crate::alerts::channels::Alert {
                     title: format!("Test alert · {}", agent.name()),
@@ -220,6 +234,7 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
             Response::Error("no job is running on this connection".into())
         }
         Request::TestChannels => Response::Error("channel tests run on the stream handler".into()),
+        Request::Notify { .. } => Response::Error("notes run on the stream handler".into()),
         Request::GetDocker | Request::SetDocker { .. } => {
             Response::Error("Docker requests run on the stream handler".into())
         }
