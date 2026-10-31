@@ -88,9 +88,7 @@ pub fn state() -> &'static str {
     if !unit_path().is_ok_and(|p| p.exists()) {
         return "not installed";
     }
-    let out = Command::new("systemctl")
-        .args(["--user", "is-active", UNIT])
-        .output();
+    let out = user_systemctl().args(["is-active", UNIT]).output();
     match out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) {
         Ok(s) if s == "active" => "active",
         Ok(s) if s == "failed" => "failed",
@@ -103,20 +101,49 @@ pub fn restart() -> Result<()> {
     systemctl(&["restart", UNIT])
 }
 
+/// `systemctl --user`, reaching the user's service manager even without a login session
+/// (after `su - user` or `sudo -u user`, which don't set its address) when it is running,
+/// as it is with lingering.
+fn user_systemctl() -> Command {
+    let mut cmd = Command::new("systemctl");
+    cmd.arg("--user");
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let run = PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }));
+        if run.join("bus").exists() {
+            cmd.env("XDG_RUNTIME_DIR", &run).env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={}", run.join("bus").display()),
+            );
+        }
+    }
+    cmd
+}
+
 fn systemctl(args: &[&str]) -> Result<()> {
-    let out = Command::new("systemctl")
-        .arg("--user")
+    let out = user_systemctl()
         .args(args)
         .output()
         .context("could not run systemctl. Is systemd running? In a container, use `pgpu agent`")?;
     if !out.status.success() {
-        bail!(
-            "systemctl --user {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("Failed to connect to bus") {
+            bail!("{}", no_user_manager());
+        }
+        bail!("systemctl --user {} failed: {}", args.join(" "), err.trim());
     }
     Ok(())
+}
+
+/// What to do when the user's service manager can't be reached: the usual cause is a shell
+/// opened with `su` or `sudo` as root, which has no login session for this user.
+fn no_user_manager() -> String {
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".into());
+    format!(
+        "your user's service manager isn't running (common after `su` or `sudo` from root). \
+         As root or with sudo, run `loginctl enable-linger {user}`, then run `pgpu service install` \
+         again. It also makes the agent start at boot"
+    )
 }
 
 /// Whether the user's services outlive their sessions; `None` when it can't be told.

@@ -53,10 +53,20 @@ ask() {
     case "$answer" in [nN]*) return 1 ;; *) return 0 ;; esac
 }
 
+# Whether the user's systemd can be reached. After `su - user` or `sudo -u user` the shell has
+# no session address; with lingering on, the manager still runs, so point at it.
+user_systemd() {
+    systemctl --user show-environment >/dev/null 2>&1 && return 0
+    run="/run/user/$(id -u)"
+    [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "$run/bus" ] || return 1
+    export XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus"
+    systemctl --user show-environment >/dev/null 2>&1
+}
+
 main() {
     banner
     step "Checking this machine"
-    [ "$(id -u)" != "0" ] || fail "run this as your normal user, not root. PocketGPU never runs as root; in a container, use the Docker image"
+    [ "$(id -u)" != "0" ] || fail "run this as your normal user, not root. PocketGPU never runs as root. On a server, make a user (adduser NAME), run: loginctl enable-linger NAME, then su - NAME and run this again. In a container, use the Docker image"
     case "$(uname -s)" in
         Linux) system=linux ;;
         Darwin) system=macos ;;
@@ -121,7 +131,7 @@ main() {
         [ "$state" = "active" ] || fail "the agent did not start ($state). Check with: pgpu doctor"
         running=1
         done_ "running, and starts when you log in"
-    elif has systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+    elif has systemctl && user_systemd; then
         state="$("$INSTALL_DIR/pocketgpu" service install --json | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
         [ "$state" = "active" ] || fail "the agent did not start ($state). Check with: pgpu doctor"
         running=1
@@ -131,6 +141,10 @@ main() {
         else
             done_ "running, and starts at boot"
         fi
+    elif [ -d /run/systemd/system ]; then
+        # systemd runs, but this shell has no login session (su or sudo from root).
+        done_ "not started yet"
+        no_manager=1
     else
         done_ "no systemd here; run it with: pgpu agent"
     fi
@@ -145,8 +159,16 @@ main() {
             profile="$HOME/.profile"
             [ "$system" = macos ] && profile="$HOME/.zprofile"
             printf '\n  %sAdd it to your PATH:%s echo '"'"'export PATH="%s:$PATH"'"'"' >> %s\n' "$DIM" "$RESET" "$INSTALL_DIR" "${profile#"$HOME"/}"
+            printf '  %sThen load it in this shell:%s . ~/%s\n' "$DIM" "$RESET" "${profile#"$HOME"/}"
             ;;
     esac
+    if [ -n "${no_manager:-}" ]; then
+        printf '\n  %sThis shell has no login session (opened with su or sudo?), so the agent can'"'"'t start\n' "$BOLD"
+        printf '  as a service yet.%s As root or with sudo, run:\n' "$RESET"
+        printf '    loginctl enable-linger %s\n' "${USER:-$(id -un)}"
+        printf '  then, as %s: %s/pgpu service install\n' "${USER:-$(id -un)}" "$INSTALL_DIR"
+        printf '  %sIt also makes the agent start at boot.%s\n' "$DIM" "$RESET"
+    fi
     if [ -n "${linger:-}" ]; then
         printf '  %sKeep it running after logout and start it at boot:%s sudo loginctl enable-linger %s\n' "$DIM" "$RESET" "${USER:-$(id -un)}"
     fi
