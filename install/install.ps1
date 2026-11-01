@@ -23,10 +23,16 @@ $script:Cross = if ($script:Fancy) { [string][char]0x2717 } else { 'x' }
 $script:Steps = 5
 $script:Step = 0
 
+# Run through `irm ... | iex` there is no script file, and `exit` would close the person's
+# PowerShell window with the message on it. Stop with `break` then, as Scoop's installer does:
+# no Fail call sits inside a loop, so it ends the install and leaves the window open.
+$script:FromIex = $null -eq $MyInvocation.MyCommand.Path
+
 function Fail($message) {
     Write-Host ''
     Write-Host "  $script:Cross $message" -ForegroundColor Red
     Write-Host ''
+    if ($script:FromIex) { break }
     exit 1
 }
 

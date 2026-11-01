@@ -188,14 +188,19 @@ async fn connection(config: &Config) -> Vec<Check> {
                 .as_ref()
                 .and_then(|u| u.host_str())
                 .map(String::from);
-            vec![
-                Check {
-                    check: "Network",
-                    ok,
-                    detail,
-                },
-                Check::ok("Relays", relays_detail(&best, preferred.as_deref())),
-            ]
+            let mut checks = vec![Check {
+                check: "Network",
+                ok,
+                detail,
+            }];
+            // With no relay answering, the Network line already says so: no ✓ next to it.
+            if !best.is_empty() {
+                checks.push(Check::ok(
+                    "Relays",
+                    relays_detail(&best, preferred.as_deref()),
+                ));
+            }
+            checks
         }
         None => vec![Check::fail(
             "Network",

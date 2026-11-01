@@ -48,7 +48,9 @@ impl NvmlGpus {
                     nvml: None,
                     error: Some(match e {
                         nvml_wrapper::error::NvmlError::LibloadingError(_) => {
-                            "no NVIDIA driver found. Install it for GPU stats; without it you still get CPU, RAM and disk".into()
+                            // Also what an AMD or Intel machine sees: no advice to install
+                            // an NVIDIA driver, just what GPU stats need.
+                            "no NVIDIA driver found. GPU stats need an NVIDIA GPU and its driver; CPU, RAM and disk still work".into()
                         }
                         e => format!("could not load the NVIDIA driver library: {e}"),
                     }),

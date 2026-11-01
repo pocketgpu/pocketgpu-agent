@@ -23,6 +23,15 @@ use state::Agent;
 /// Runs the agent in the foreground until Ctrl-C or a termination signal.
 pub async fn run(paths: Paths) -> Result<()> {
     root::check()?;
+    // A second agent for the same user would take over the local socket (Linux, macOS) and
+    // leave the running one unreachable: `pgpu status` would then say it isn't running. So
+    // stop here, before this one's endpoint or alerts start.
+    if crate::ipc::client::connect(&paths).await.is_ok() {
+        anyhow::bail!(
+            "PocketGPU is already running in the background for this user (see `pgpu status`), \
+             so there's no need to start it here"
+        );
+    }
     // launchd holds the log open (append mode), so it is emptied in place when too big.
     #[cfg(target_os = "macos")]
     if let Ok(log) = crate::cli::service::log_path() {
