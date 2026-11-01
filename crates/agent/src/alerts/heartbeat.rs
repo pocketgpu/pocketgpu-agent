@@ -42,6 +42,8 @@ async fn beat(agent: &Agent, http: &reqwest::Client) -> Result<()> {
     let hb = Heartbeat {
         offline_after_s: (minutes * 60.0).round().max(0.0) as u32,
         tickets,
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        os: Some(std::env::consts::OS.to_string()),
     };
     client::signed_post(
         agent,

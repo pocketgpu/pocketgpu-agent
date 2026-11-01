@@ -74,6 +74,12 @@ pub struct AlertResult {
 pub struct Heartbeat {
     pub offline_after_s: u32,
     pub tickets: Vec<String>,
+    /// The agent's version and system ("linux", "windows", "macos"), counted on the admin
+    /// page. Agents before them send neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
 }
 
 pub const HEARTBEAT_EVERY_S: u64 = 60;
