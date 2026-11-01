@@ -47,3 +47,20 @@ async fn phones_read_history() {
             .all(|p| p.util_max == 60 && p.temp_max_c == 70)
     );
 }
+
+#[tokio::test]
+async fn phones_read_the_last_ten_minutes_without_disks() {
+    let h = Harness::start().await;
+    for _ in 0..3 {
+        h.agent.sampler.take(None);
+    }
+    let phone = h.phone(Some(Permission::View)).await;
+    let machine = h.connect(&phone).await.unwrap();
+    let reply = machine.control(Request::GetRecent).await.unwrap();
+    let Response::Recent(samples) = reply else {
+        panic!("expected Recent, got {reply:?}");
+    };
+    assert!(samples.len() >= 3);
+    assert!(samples.windows(2).all(|w| w[0].at_ms <= w[1].at_ms));
+    assert!(samples.iter().all(|s| s.disks.is_empty()));
+}

@@ -84,6 +84,13 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
             }
         }
+        Request::GetRecent => {
+            let mut samples = agent.sampler.window(0, u64::MAX);
+            for s in &mut samples {
+                s.disks.clear();
+            }
+            Response::Recent(samples)
+        }
         Request::SetPushTicket { ticket } => {
             // Tickets are 128-bit hex from the push server; anything else is refused.
             if ticket.len() != 32 || !ticket.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -129,6 +136,7 @@ fn describe(req: &Request) -> String {
         Request::Hello { .. } => "Hello".into(),
         Request::Status { .. } => "Status".into(),
         Request::GetHistory { .. } => "GetHistory".into(),
+        Request::GetRecent => "GetRecent".into(),
         Request::ListProcesses => "ListProcesses".into(),
         Request::KillProcess { pid } => format!("KillProcess {pid}"),
         Request::ListActions => "ListActions".into(),

@@ -175,6 +175,10 @@ pub mod control {
             app_version: String,
             proto: u16,
         },
+        /// The one-second samples the agent keeps in memory (the last 10 minutes), oldest
+        /// first, without disks. Agents before it answer with an error, and the phone starts
+        /// from the per-minute history instead.
+        GetRecent,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -196,6 +200,7 @@ pub mod control {
         Error(Error),
         Games(Vec<Game>),
         Status(Box<Status>),
+        Recent(Vec<Sample>),
     }
 
     /// The answer to `Status`.
@@ -238,6 +243,7 @@ pub mod control {
                 Self::Hello { .. }
                 | Self::Status { .. }
                 | Self::GetHistory { .. }
+                | Self::GetRecent
                 | Self::ListActions
                 | Self::ListRuns { .. }
                 | Self::ListGames
