@@ -44,7 +44,7 @@ pub async fn run(paths: &Paths, json: bool, preset: Option<Permission>) -> Resul
                                 eprintln!("Pairing {} as {}.", describe(&ask), p.as_str());
                                 Some(p)
                             }
-                            None => prompt(ask).await?,
+                            None => prompt(ask, shell_enabled(paths).await).await?,
                         };
                         write_frame(&mut w, &Request::PairDecision { permission }).await?;
                     }
@@ -103,6 +103,9 @@ fn show_code(info: &PairCodeInfo, json: bool) -> Result<()> {
     println!("  Scan with the PocketGPU app");
     println!("  or enter code {}", info.code);
     println!("  Machine key {}", info.agent_fingerprint);
+    // The QR code opens the app, not a web page: someone without it needs to know where to
+    // get it before the code expires.
+    println!("  No app yet? It's in beta: pocketgpu.app/#beta");
     if !std::io::stdout().is_terminal() {
         println!(
             "  Expires in {}:{:02}",
@@ -113,31 +116,65 @@ fn show_code(info: &PairCodeInfo, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn describe(ask: &PairAsk) -> String {
-    let platform = match ask.platform {
+fn platform(ask: &PairAsk) -> &'static str {
+    match ask.platform {
         Platform::Ios => "iOS",
         Platform::Android => "Android",
         Platform::Desktop => "desktop",
         Platform::Unknown => "unknown device",
-    };
+    }
+}
+
+fn describe(ask: &PairAsk) -> String {
     format!(
-        "\"{}\" ({platform}, key {})",
-        ask.device_name, ask.device_fingerprint
+        "\"{}\" ({}, key {})",
+        ask.device_name,
+        platform(ask),
+        ask.device_fingerprint
     )
 }
 
-/// Asks on the terminal. End of input counts as a denial.
-async fn prompt(ask: PairAsk) -> Result<Option<Permission>> {
-    // The key first, on its own line: the name is whatever the phone chose to call itself.
-    let question = format!(
-        "  Phone key  {}  (check it matches the phone's screen)\n  Allow {}?  [v]iew  [c]ontrol  [s]hell  [d]eny: ",
-        ask.device_fingerprint,
-        describe(&ask)
-    );
+/// Whether terminal access is on, for the Shell line; None when the agent doesn't say.
+async fn shell_enabled(paths: &Paths) -> Option<bool> {
+    match client::call(paths, Request::GetShell).await {
+        Ok(Response::Shell { enabled, .. }) => Some(enabled),
+        _ => None,
+    }
+}
+
+/// The question, with what each level allows. The key comes first, on its own line: the name
+/// is whatever the phone chose to call itself.
+fn menu(ask: &PairAsk, shell_on: Option<bool>, user: &str) -> String {
+    let shell_off = if shell_on == Some(false) {
+        "\n                (the terminal stays off here until you run: pgpu shell on)"
+    } else {
+        ""
+    };
+    format!(
+        "  Phone key  {key}  (check it matches the phone's screen)\n\
+         \x20 \"{name}\" ({platform}) wants to connect. What can it do on this machine?\n\
+         \x20   v  View     see stats, jobs and alerts\n\
+         \x20   c  Control  View, plus run quick actions, stop jobs and kill processes\n\
+         \x20   s  Shell    Control, plus a terminal: it can run any command as {user}{shell_off}\n\
+         \x20   d  Deny\n",
+        key = ask.device_fingerprint,
+        name = ask.device_name,
+        platform = platform(ask),
+    )
+}
+
+/// Asks on the terminal; Enter picks Control, the usual choice. End of input counts as a
+/// denial.
+async fn prompt(ask: PairAsk, shell_on: Option<bool>) -> Result<Option<Permission>> {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "this user".into());
+    let menu = menu(&ask, shell_on, &user);
     tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin();
+        eprint!("{menu}");
         loop {
-            eprint!("{question}");
+            eprint!("  Choose v, c, s or d [c]: ");
             std::io::stderr().flush()?;
             let mut line = String::new();
             if stdin.read_line(&mut line)? == 0 {
@@ -154,7 +191,7 @@ async fn prompt(ask: PairAsk) -> Result<Option<Permission>> {
 fn parse_answer(line: &str) -> Option<Option<Permission>> {
     match line.trim().to_ascii_lowercase().as_str() {
         "v" | "view" => Some(Some(Permission::View)),
-        "c" | "control" => Some(Some(Permission::Control)),
+        "" | "c" | "control" => Some(Some(Permission::Control)),
         "s" | "shell" => Some(Some(Permission::Shell)),
         "d" | "deny" | "n" | "no" => Some(None),
         _ => None,
@@ -187,5 +224,23 @@ mod tests {
         assert_eq!(parse_answer(" View "), Some(Some(Permission::View)));
         assert_eq!(parse_answer("d"), Some(None));
         assert_eq!(parse_answer("maybe"), None);
+        // Enter alone picks Control.
+        assert_eq!(parse_answer("\n"), Some(Some(Permission::Control)));
+    }
+
+    #[test]
+    fn the_menu_says_what_each_level_allows() {
+        let ask = PairAsk {
+            device_name: "Pixel 9".into(),
+            platform: Platform::Android,
+            device_fingerprint: "a91c 40de 77b2 19aa".into(),
+        };
+        let menu = menu(&ask, Some(false), "kami");
+        // The key comes before anything the phone named itself.
+        assert!(menu.starts_with("  Phone key  a91c 40de 77b2 19aa"));
+        assert!(menu.contains("\"Pixel 9\" (Android) wants to connect"));
+        assert!(menu.contains("any command as kami"));
+        assert!(menu.contains("pgpu shell on"));
+        assert!(!super::menu(&ask, Some(true), "kami").contains("pgpu shell on"));
     }
 }

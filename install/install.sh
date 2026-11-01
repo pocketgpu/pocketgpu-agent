@@ -158,7 +158,7 @@ main() {
             # zsh is the default shell on macOS.
             profile="$HOME/.profile"
             [ "$system" = macos ] && profile="$HOME/.zprofile"
-            printf '\n  %sAdd it to your PATH:%s echo '"'"'export PATH="%s:$PATH"'"'"' >> %s\n' "$DIM" "$RESET" "$INSTALL_DIR" "${profile#"$HOME"/}"
+            printf '\n  %sAdd it to your PATH:%s echo '"'"'export PATH="%s:$PATH"'"'"' >> ~/%s\n' "$DIM" "$RESET" "$INSTALL_DIR" "${profile#"$HOME"/}"
             printf '  %sThen load it in this shell:%s . ~/%s\n' "$DIM" "$RESET" "${profile#"$HOME"/}"
             ;;
     esac
@@ -173,14 +173,14 @@ main() {
         printf '  %sKeep it running after logout and start it at boot:%s sudo loginctl enable-linger %s\n' "$DIM" "$RESET" "${USER:-$(id -un)}"
     fi
 
-    paired="$("$INSTALL_DIR/pocketgpu" status --json 2>/dev/null | sed -n 's/.*"paired":\([0-9]*\).*/\1/p')"
+    paired="$("$INSTALL_DIR/pocketgpu" status --json 2>/dev/null | sed -n 's/.*"paired": *\([0-9]*\).*/\1/p')"
     if [ -n "$running" ] && [ "${paired:-1}" = "0" ] && ask "Pair your phone now?"; then
         printf '\n'
         "$INSTALL_DIR/pocketgpu" pair </dev/tty
         return
     fi
     printf '\n  %sNext%s\n' "$BOLD" "$RESET"
-    [ "${paired:-1}" != "0" ] || printf '    %s%-24s%s%s\n' "$GREEN" "pgpu pair" "$RESET" "${DIM}connect your phone${RESET}"
+    case "${paired:-0}" in 0) printf '    %s%-24s%s%s\n' "$GREEN" "pgpu pair" "$RESET" "${DIM}connect your phone${RESET}" ;; esac
     printf '    %s%-24s%s%s\n' "$GREEN" "pgpu status" "$RESET" "${DIM}what this machine shares${RESET}"
     printf '    %s%-24s%s%s\n\n' "$GREEN" "pgpu run -- <command>" "$RESET" "${DIM}watch a job from your phone${RESET}"
 }

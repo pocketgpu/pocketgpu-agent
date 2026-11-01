@@ -132,5 +132,5 @@ pub fn render(list: &[DeviceInfo], now_ms: i64) -> String {
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
-        + "\n"
+        + "\n\nTo change what a phone can do: pgpu devices set <name> view|control|shell\n"
 }
