@@ -213,6 +213,16 @@ function Install-PocketGPU {
         }
         Copy-Item (Join-Path $tmp 'pocketgpu.exe') $exe
         Set-Content -Path (Join-Path $dir 'pgpu.cmd') -Value "@`"%~dp0pocketgpu.exe`" %*" -Encoding ASCII
+        # An older install left a pgpu.exe here, and Windows runs .exe before .cmd: `pgpu` would
+        # stay the old version. Renamed if it's running, like pocketgpu.exe above.
+        $stale = Join-Path $dir 'pgpu.exe'
+        if (Test-Path $stale) {
+            Remove-Item -Force -ErrorAction SilentlyContinue $stale
+            if (Test-Path $stale) {
+                Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir 'pgpu.old.exe')
+                Rename-Item $stale 'pgpu.old.exe'
+            }
+        }
         $version = ((& $exe --version) -split ' ')[-1]
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         $pathNote = ''

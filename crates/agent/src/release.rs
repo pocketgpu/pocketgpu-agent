@@ -50,7 +50,11 @@ pub fn verify_signature(pubkey: &str, sums: &[u8], minisig: &str) -> Result<()> 
     let signature = minisign_verify::Signature::decode(minisig)
         .map_err(|_| anyhow!("SHA256SUMS.minisig is not a minisign signature"))?;
     key.verify(sums, &signature, false).map_err(|_| {
-        anyhow!("the release signature doesn't match; the download is damaged or was changed")
+        anyhow!(
+            "the release signature doesn't match the key this pgpu trusts: the download is \
+             damaged or was changed, or this pgpu is older than the current signing key. \
+             Reinstall from https://pocketgpu.app"
+        )
     })
 }
 
