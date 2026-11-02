@@ -130,6 +130,29 @@ function Ask($question) {
     return -not ($answer -match '^[nN]')
 }
 
+# The same, but no unless the answer is yes.
+function Ask-No($question) {
+    if (-not [Environment]::UserInteractive) { return $false }
+    Write-Host ''
+    Write-Host '  ? ' -ForegroundColor Green -NoNewline
+    $answer = Read-Host "$question [y/N]"
+    return ($answer -match '^[yY]')
+}
+
+# Crash reports (board 25): off unless the user says yes, asked once.
+function Ask-CrashReports($exe) {
+    $state = & $exe --json crash-reports 2>$null
+    if ("$state" -match 'true') { return }
+    Write-Host ''
+    Write-Host '  If the agent crashes, it can tell us: the error, where in the agent it stopped,' -ForegroundColor DarkGray
+    Write-Host '  its version and the system. Never machine names, commands or logs.' -ForegroundColor DarkGray
+    Write-Host '  Change it any time with: pgpu crash-reports on|off' -ForegroundColor DarkGray
+    if (Ask-No 'Send crash reports?') {
+        & $exe crash-reports on | Out-Null
+        Done 'crash reports on'
+    }
+}
+
 # The tray app and agent window, from the same release. Its installer carries the agent too,
 # but leaves this one alone since it is as new.
 function Install-Tray($base, $tmp) {
@@ -233,6 +256,7 @@ function Install-PocketGPU {
         }
         $env:Path = "$env:Path;$dir"
         Done "pgpu $version$pathNote"
+        Ask-CrashReports $exe
 
         Start-Step 'Starting the agent'
         if ($env:PGPU_NO_SERVICE) {

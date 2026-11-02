@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod control;
+pub mod crash;
 pub mod devices;
 pub mod endpoint;
 pub mod events;
@@ -44,7 +45,14 @@ pub async fn run(paths: Paths) -> Result<()> {
                 _ => Ok(()),
             });
     }
+    let _ = paths.create_all();
+    crash::install_hook(&paths);
     let agent = Agent::open(paths, collect::from_env())?;
+    // The last run's crash, if it crashed and crash reports are on (board 25).
+    tokio::spawn({
+        let agent = agent.clone();
+        async move { crash::send_pending(&agent).await }
+    });
     let endpoint = endpoint::bind(&agent, Relays::FromConfig).await?;
     tracing::info!(
         id = %agent.identity.agent_id(),

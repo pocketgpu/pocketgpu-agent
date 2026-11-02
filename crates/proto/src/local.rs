@@ -100,6 +100,11 @@ pub enum Request {
         title: String,
         body: String,
     },
+    /// Crash reports (board 25): `Some` turns them on or off, `None` only asks. Replies
+    /// `CrashReports`.
+    CrashReports {
+        on: Option<bool>,
+    },
 }
 
 /// Where the agent sends alerts besides the push server (F20).
@@ -217,6 +222,10 @@ pub enum Response {
         phones: u32,
         channels: u32,
         held: bool,
+    },
+    /// Whether crash reports are on.
+    CrashReports {
+        on: bool,
     },
 }
 

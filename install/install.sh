@@ -53,6 +53,25 @@ ask() {
     case "$answer" in [nN]*) return 1 ;; *) return 0 ;; esac
 }
 
+# The same, but no unless the answer is yes.
+ask_no() {
+    [ -t 1 ] && [ -r /dev/tty ] || return 1
+    printf '\n  %s?%s %s [y/N] ' "$GREEN" "$RESET" "$1"
+    read -r answer </dev/tty || return 1
+    case "$answer" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Crash reports (board 25): off unless the user says yes, asked once.
+crash_reports() {
+    case "$("$INSTALL_DIR/pocketgpu" --json crash-reports 2>/dev/null)" in *true*) return ;; esac
+    printf '\n  %sIf the agent crashes, it can tell us: the error, where in the agent it stopped,%s' "$DIM" "$RESET"
+    printf '\n  %sits version and the system. Never machine names, commands or logs.%s' "$DIM" "$RESET"
+    printf '\n  %sChange it any time with: pgpu crash-reports on|off%s\n' "$DIM" "$RESET"
+    if ask_no "Send crash reports?"; then
+        "$INSTALL_DIR/pocketgpu" crash-reports on >/dev/null && done_ "crash reports on"
+    fi
+}
+
 # Whether the user's systemd can be reached. After `su - user` or `sudo -u user` the shell has
 # no session address; with lingering on, the manager still runs, so point at it.
 user_systemd() {
@@ -121,6 +140,7 @@ main() {
     version="$("$INSTALL_DIR/pocketgpu" --version | awk '{print $NF}')"
     case "$INSTALL_DIR" in "$HOME"/*) where="~${INSTALL_DIR#"$HOME"}" ;; *) where="$INSTALL_DIR" ;; esac
     done_ "pgpu $version in $where"
+    crash_reports
 
     step "Starting the agent"
     running=""

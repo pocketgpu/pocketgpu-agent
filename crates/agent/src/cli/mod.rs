@@ -9,6 +9,7 @@ use crate::store::paths::Paths;
 pub mod actions;
 pub mod alerts;
 pub mod audit;
+pub mod crash;
 pub mod devices;
 pub mod docker;
 pub mod doctor;
@@ -130,6 +131,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<shell::Action>,
     },
+    /// Send a report to PocketGPU if the agent crashes: status (the default), on or off.
+    CrashReports {
+        #[command(subcommand)]
+        action: Option<crash::Action>,
+    },
     /// Install a signed new version: checks its signature and checksum before replacing this one.
     Update {
         /// Only say whether a newer version exists.
@@ -238,6 +244,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
             update::run(cli.json, *check, version.as_deref()).await
         }
         Command::RestartAgent => restart_agent(),
+        Command::CrashReports { action } => crash::run(&paths, cli.json, *action).await,
     }
 }
 

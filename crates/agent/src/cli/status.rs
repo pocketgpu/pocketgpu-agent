@@ -16,6 +16,14 @@ pub async fn run(paths: &Paths, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&to_json(&status))?);
     } else {
         print!("{}", render(&status));
+        println!(
+            "{:<11} {}",
+            "Crashes",
+            match super::crash::state(paths) {
+                "on" => "reports on   (pgpu crash-reports off)",
+                _ => "reports off  (pgpu crash-reports on)",
+            }
+        );
     }
     Ok(())
 }

@@ -188,6 +188,10 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
             Response::Ok
         }
         Request::GetShell => shell_state(agent),
+        Request::CrashReports { on } => match set_crash_reports(agent, on) {
+            Ok(on) => Response::CrashReports { on },
+            Err(e) => Response::Error(format!("{e:#}")),
+        },
         Request::SetShell { on } => match set_shell(agent, on) {
             Ok(()) => shell_state(agent),
             Err(e) => Response::Error(format!("{e:#}")),
@@ -305,6 +309,18 @@ fn shell_state(agent: &Agent) -> Response {
 }
 
 /// `pgpu shell on|off`: saved in `config.toml`; off closes every session at once.
+/// `pgpu crash-reports` (board 25): changes the setting when `on` is given; returns it.
+fn set_crash_reports(agent: &Arc<Agent>, on: Option<bool>) -> Result<bool> {
+    let mut cfg = agent.config.write().expect("config lock poisoned");
+    if let Some(on) = on {
+        let mut next = cfg.clone();
+        next.crash_reports = on;
+        next.save(&agent.paths.config_file())?;
+        *cfg = next;
+    }
+    Ok(cfg.crash_reports)
+}
+
 fn set_shell(agent: &Arc<Agent>, on: bool) -> Result<()> {
     {
         let mut cfg = agent.config.write().expect("config lock poisoned");
