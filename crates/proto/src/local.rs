@@ -105,6 +105,13 @@ pub enum Request {
     CrashReports {
         on: Option<bool>,
     },
+    /// `pgpu run` again, after the agent restarted (an update, a crash): picks up job `id`,
+    /// which kept running and writing its log. Replies `JobStarted`, then the stream goes on
+    /// as after `JobStart`; an error if the agent no longer has it as running.
+    JobResume {
+        id: u64,
+        pgid: Option<u32>,
+    },
 }
 
 /// Where the agent sends alerts besides the push server (F20).

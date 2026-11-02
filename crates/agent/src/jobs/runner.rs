@@ -90,46 +90,126 @@ pub async fn run(paths: &Paths, json: bool, opts: RunOptions) -> Result<()> {
     }
 }
 
-/// The local-socket session with the agent for one job.
+/// How often a job whose agent went away tries to reach the new one.
+const RETRY_EVERY: Duration = Duration::from_secs(2);
+/// A job that ends while the agent restarts waits this long to report it.
+const END_WAIT: Duration = Duration::from_secs(60);
+
+/// The local-socket session with the agent for one job. When the agent goes away (an
+/// update, a restart, a crash), the job keeps running and writing its log, and this picks the
+/// session up again with the new agent (`JobResume`), for up to `jobs::RESUME_WITHIN`.
 struct Session {
     id: u64,
     log_path: PathBuf,
+    paths: Paths,
+    pgid: Option<u32>,
     write: tokio::io::WriteHalf<client::Stream>,
     replies: mpsc::Receiver<Response>,
+    /// When the agent went away, while it's gone.
+    lost_at: Option<Instant>,
+}
+
+type Link = (
+    tokio::io::WriteHalf<client::Stream>,
+    mpsc::Receiver<Response>,
+    u64,
+    PathBuf,
+);
+
+async fn connect(paths: &Paths, first: Request) -> Option<Link> {
+    let stream = client::connect(paths).await.ok()?;
+    let (reader, mut write) = tokio::io::split(stream);
+    write_frame(&mut write, &first).await.ok()?;
+    let mut replies = crate::ipc::forward_frames::<_, Response>(reader);
+    match tokio::time::timeout(Duration::from_secs(5), replies.recv()).await {
+        Ok(Some(Response::JobStarted { id, log_path })) => {
+            Some((write, replies, id, PathBuf::from(log_path)))
+        }
+        Ok(Some(Response::Error(e))) => {
+            eprintln!("pgpu: {e}");
+            None
+        }
+        _ => None,
+    }
 }
 
 impl Session {
     async fn open(paths: &Paths, start: JobStart) -> Option<Self> {
-        let stream = client::connect(paths).await.ok()?;
-        let (reader, mut write) = tokio::io::split(stream);
-        write_frame(&mut write, &Request::JobStart(start))
-            .await
-            .ok()?;
-        let mut replies = crate::ipc::forward_frames::<_, Response>(reader);
-        match tokio::time::timeout(Duration::from_secs(5), replies.recv()).await {
-            Ok(Some(Response::JobStarted { id, log_path })) => Some(Self {
-                id,
-                log_path: PathBuf::from(log_path),
-                write,
-                replies,
-            }),
-            Ok(Some(Response::Error(e))) => {
-                eprintln!("pgpu: {e}");
-                None
-            }
-            _ => None,
-        }
+        let (write, replies, id, log_path) = connect(paths, Request::JobStart(start)).await?;
+        Some(Self {
+            id,
+            log_path,
+            paths: paths.clone(),
+            pgid: None,
+            write,
+            replies,
+            lost_at: None,
+        })
     }
 
     async fn report_group(&mut self, pgid: u32) {
+        self.pgid = Some(pgid);
         let _ = write_frame(&mut self.write, &Request::JobProcess { pgid }).await;
+    }
+
+    /// One try at reaching the agent again.
+    async fn reconnect(&mut self) -> bool {
+        let resume = Request::JobResume {
+            id: self.id,
+            pgid: self.pgid,
+        };
+        match connect(&self.paths, resume).await {
+            Some((write, replies, _, _)) => {
+                (self.write, self.replies) = (write, replies);
+                self.lost_at = None;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The next message from the agent. While the agent is away this keeps trying to reach
+    /// the new one; `None` once it has given up.
+    async fn next(&mut self) -> Option<Response> {
+        loop {
+            match self.lost_at {
+                None => match self.replies.recv().await {
+                    Some(msg) => return Some(msg),
+                    None => self.lost_at = Some(Instant::now()),
+                },
+                Some(at) => {
+                    if at.elapsed() > super::RESUME_WITHIN {
+                        return None;
+                    }
+                    tokio::time::sleep(RETRY_EVERY).await;
+                    if self.reconnect().await {
+                        eprintln!("pgpu: the agent is back; job {} is watched again", self.id);
+                    }
+                }
+            }
+        }
     }
 
     async fn end(mut self, exit_code: Option<i32>, stopped: bool) {
         let end = Request::JobEnd { exit_code, stopped };
-        if write_frame(&mut self.write, &end).await.is_ok() {
-            // Wait briefly for the agent to record it, so `pgpu jobs` right after is current.
-            let _ = tokio::time::timeout(Duration::from_secs(2), self.replies.recv()).await;
+        // The agent may be restarting right now: give it a minute, so the phone still
+        // hears how the job ended.
+        let until = Instant::now() + END_WAIT;
+        loop {
+            if self.lost_at.is_none() && write_frame(&mut self.write, &end).await.is_ok() {
+                // Wait briefly for the agent to record it, so `pgpu jobs` right after is current.
+                if let Ok(Some(_)) =
+                    tokio::time::timeout(Duration::from_secs(2), self.replies.recv()).await
+                {
+                    return;
+                }
+            }
+            self.lost_at.get_or_insert_with(Instant::now);
+            if Instant::now() >= until {
+                return;
+            }
+            tokio::time::sleep(RETRY_EVERY).await;
+            self.reconnect().await;
         }
     }
 }
@@ -151,7 +231,7 @@ async fn supervise(
     loop {
         let stop_request = async {
             match session.as_mut() {
-                Some(s) => s.replies.recv().await,
+                Some(s) => s.next().await,
                 None => std::future::pending().await,
             }
         };
@@ -170,7 +250,7 @@ async fn supervise(
                     kill_at = Some(tokio::time::Instant::now() + STOP_GRACE);
                 }
                 Some(_) => {}
-                // The agent went away: the job keeps running, just unwatched.
+                // The agent stayed away: the job keeps running, just unwatched.
                 None => session = None,
             },
             _ = kill_timer => {
@@ -198,7 +278,7 @@ async fn supervise(
     loop {
         let stop_request = async {
             match session.as_mut() {
-                Some(s) => s.replies.recv().await,
+                Some(s) => s.next().await,
                 None => std::future::pending().await,
             }
         };

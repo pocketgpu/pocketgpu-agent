@@ -50,6 +50,12 @@ where
                 }
                 return;
             }
+            Request::JobResume { id, pgid } => {
+                if let Err(e) = crate::jobs::resume(agent.clone(), id, pgid, r, w).await {
+                    tracing::warn!("job session failed: {e:#}");
+                }
+                return;
+            }
             Request::GetDocker | Request::SetDocker { .. } => {
                 let on = match req {
                     Request::SetDocker { on } => Some(on),
@@ -234,9 +240,10 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
             Ok(()) => channels(agent),
             Err(e) => Response::Error(format!("{e:#}")),
         },
-        Request::JobStart(_) | Request::JobProcess { .. } | Request::JobEnd { .. } => {
-            Response::Error("no job is running on this connection".into())
-        }
+        Request::JobStart(_)
+        | Request::JobResume { .. }
+        | Request::JobProcess { .. }
+        | Request::JobEnd { .. } => Response::Error("no job is running on this connection".into()),
         Request::TestChannels => Response::Error("channel tests run on the stream handler".into()),
         Request::Notify { .. } => Response::Error("notes run on the stream handler".into()),
         Request::GetDocker | Request::SetDocker { .. } => {

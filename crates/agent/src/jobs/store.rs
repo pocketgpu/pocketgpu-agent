@@ -95,6 +95,16 @@ pub fn mark_lost(db: &Connection, id: u64) -> Result<()> {
     Ok(())
 }
 
+/// Jobs still marked running, which a restarted agent waits for (`jobs::lose_unclaimed`).
+pub fn running_ids(db: &Connection) -> Result<Vec<u64>> {
+    let mut q = db.prepare("SELECT job_id FROM jobs WHERE state = 'running'")?;
+    let ids = q
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .map(|r| r.map(|id| id as u64))
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
 /// At agent start: jobs still marked running lost their wrapper with the old agent.
 pub fn lose_running(db: &Connection) -> Result<usize> {
     Ok(db.execute(

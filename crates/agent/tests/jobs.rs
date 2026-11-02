@@ -202,3 +202,92 @@ async fn run_in_a_terminal_gives_the_job_a_terminal() {
     // Progress redraws collapse to what's on screen.
     assert_eq!(detail.tail, vec!["100%".to_string()]);
 }
+
+/// After an agent restart (an update), `pgpu run` picks its job up again and its end still
+/// counts: alerts go out as usual. Jobs nobody picks up are marked lost after a while.
+#[tokio::test]
+async fn jobs_are_picked_up_again_after_a_restart() {
+    use pocketgpu_proto::local::{JobStart, Request as Local, Response as LocalReply};
+    use pocketgpu_proto::{read_frame, write_frame};
+
+    let h = agent_with_socket().await;
+    let start = |name: &str| JobStart {
+        name: name.into(),
+        command: "train.py".into(),
+        cwd: "/".into(),
+        alerts: true,
+    };
+    // Left running by the agent before the restart.
+    let jobs_dir = h.agent.paths.jobs_dir();
+    let (kept, _) = store::create(&h.agent.db(), &start("train"), &jobs_dir).unwrap();
+    let (gone, _) = store::create(&h.agent.db(), &start("abandoned"), &jobs_dir).unwrap();
+    let mut ended = h.agent.jobs.subscribe();
+
+    let mut s = pocketgpu::ipc::client::connect(&h.agent.paths)
+        .await
+        .unwrap();
+    write_frame(
+        &mut s,
+        &Local::JobResume {
+            id: kept,
+            pgid: Some(4242),
+        },
+    )
+    .await
+    .unwrap();
+    let reply: Option<LocalReply> = read_frame(&mut s).await.unwrap();
+    assert!(
+        matches!(reply, Some(LocalReply::JobStarted { id, .. }) if id == kept),
+        "{reply:?}"
+    );
+    assert!(h.agent.jobs.is_running(kept));
+
+    // Nobody came back for the other one.
+    pocketgpu::jobs::lose_unclaimed(h.agent.clone(), Duration::from_millis(50)).await;
+    let state = |id| {
+        store::get(&h.agent.db(), id)
+            .unwrap()
+            .unwrap()
+            .0
+            .summary
+            .state
+    };
+    assert_eq!(state(gone), JobState::Lost);
+    assert_eq!(state(kept), JobState::Running);
+
+    write_frame(
+        &mut s,
+        &Local::JobEnd {
+            exit_code: Some(0),
+            stopped: false,
+        },
+    )
+    .await
+    .unwrap();
+    let _: Option<LocalReply> = read_frame(&mut s).await.unwrap();
+    assert_eq!(state(kept), JobState::Finished);
+    let event = tokio::time::timeout(Duration::from_secs(2), ended.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (event.id, event.name.as_str(), event.alerts_on),
+        (kept, "train", true)
+    );
+
+    // A job that already ended can't be picked up.
+    let mut s = pocketgpu::ipc::client::connect(&h.agent.paths)
+        .await
+        .unwrap();
+    write_frame(
+        &mut s,
+        &Local::JobResume {
+            id: kept,
+            pgid: None,
+        },
+    )
+    .await
+    .unwrap();
+    let reply: Option<LocalReply> = read_frame(&mut s).await.unwrap();
+    assert!(matches!(reply, Some(LocalReply::Error(_))), "{reply:?}");
+}

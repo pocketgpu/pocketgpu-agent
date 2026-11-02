@@ -97,6 +97,10 @@ impl Jobs {
     }
 }
 
+/// How long jobs that were running when the agent stopped get to come back (`JobResume`)
+/// before they count as lost; `pgpu run` keeps trying as long.
+pub const RESUME_WITHIN: Duration = Duration::from_secs(5 * 60);
+
 /// One `pgpu run` from `JobStart` to `JobEnd`. A stream that closes first marks the job lost.
 pub async fn session<R, W>(agent: Arc<Agent>, start: JobStart, reader: R, mut w: W) -> Result<()>
 where
@@ -115,12 +119,71 @@ where
             return Ok(());
         }
     };
+    tracing::info!(job = id, name = %start.name, "job started");
+    watch(agent, id, None, start.name, start.alerts, &log, reader, w).await
+}
+
+/// `pgpu run` again after the agent restarted: the job kept running and writing its log, so
+/// it carries on where it was, alerts and all.
+pub async fn resume<R, W>(
+    agent: Arc<Agent>,
+    id: u64,
+    pgid: Option<u32>,
+    reader: R,
+    mut w: W,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
+    let found = store::get(&agent.db(), id).ok().flatten();
+    let Some((detail, log)) =
+        found.filter(|(d, _)| d.summary.state == JobState::Running && !agent.jobs.is_running(id))
+    else {
+        write_frame(
+            &mut w,
+            &Response::Error(format!("job {id} isn't waiting to be picked up")),
+        )
+        .await?;
+        return Ok(());
+    };
+    tracing::info!(job = id, "job picked up again after a restart");
+    let alerts = detail.alerts_on;
+    watch(
+        agent,
+        id,
+        pgid,
+        detail.summary.name,
+        alerts,
+        &log,
+        reader,
+        w,
+    )
+    .await
+}
+
+/// The rest of a job's session, from `JobStarted` until it ends or its `pgpu run` goes away.
+#[allow(clippy::too_many_arguments)]
+async fn watch<R, W>(
+    agent: Arc<Agent>,
+    id: u64,
+    pgid: Option<u32>,
+    name: String,
+    alerts: bool,
+    log: &std::path::Path,
+    reader: R,
+    mut w: W,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
     let (stop_tx, mut stop_rx) = mpsc::channel(1);
     agent.jobs.running().insert(
         id,
         Running {
             stop: stop_tx,
-            pgid: None,
+            pgid,
         },
     );
     write_frame(
@@ -131,7 +194,6 @@ where
         },
     )
     .await?;
-    tracing::info!(job = id, name = %start.name, "job started");
 
     let mut from_wrapper = crate::ipc::forward_frames::<_, Request>(reader);
     let state = loop {
@@ -165,15 +227,43 @@ where
     let alerts_on = store::get(&agent.db(), id)
         .ok()
         .flatten()
-        .map_or(start.alerts, |(detail, _)| detail.alerts_on);
+        .map_or(alerts, |(detail, _)| detail.alerts_on);
     let _ = agent.jobs.ended.send(JobEnded {
         id,
-        name: start.name,
+        name,
         state: state.0,
         exit_code: state.1,
         alerts_on,
     });
     Ok(())
+}
+
+/// At start: jobs the last run left as running get [`RESUME_WITHIN`] to be picked up again
+/// by their `pgpu run`; the ones that aren't are marked lost then.
+pub async fn lose_unclaimed(agent: Arc<Agent>, after: Duration) {
+    let waiting = match store::running_ids(&agent.db()) {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("could not check old jobs: {e:#}");
+            return;
+        }
+    };
+    if waiting.is_empty() {
+        return;
+    }
+    tracing::info!(
+        "{} job(s) were running when the agent stopped; waiting for them",
+        waiting.len()
+    );
+    tokio::time::sleep(after).await;
+    for id in waiting {
+        if !agent.jobs.is_running(id) && store::mark_lost(&agent.db(), id).is_ok() {
+            tracing::warn!(
+                job = id,
+                "job didn't come back after the restart; marked lost"
+            );
+        }
+    }
 }
 
 /// Every few seconds: the VRAM of each running job's processes, kept as its peak.

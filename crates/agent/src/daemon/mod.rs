@@ -59,11 +59,11 @@ pub async fn run(paths: Paths) -> Result<()> {
         name = %agent.name(),
         "agent started"
     );
-    match crate::jobs::store::lose_running(&agent.db()) {
-        Ok(0) => {}
-        Ok(n) => tracing::warn!("{n} job(s) were running when the agent stopped; marked lost"),
-        Err(e) => tracing::warn!("could not check old jobs: {e:#}"),
-    }
+    // Jobs still running from before get a while to reconnect (`pgpu run` keeps trying).
+    tokio::spawn(crate::jobs::lose_unclaimed(
+        agent.clone(),
+        crate::jobs::RESUME_WITHIN,
+    ));
     let router = endpoint::serve(agent.clone(), endpoint);
     let vram = tokio::spawn(crate::jobs::track_vram(agent.clone()));
     let prune = tokio::spawn(crate::jobs::prune_hourly(agent.clone()));
