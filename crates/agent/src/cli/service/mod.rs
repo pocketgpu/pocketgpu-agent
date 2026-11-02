@@ -26,7 +26,9 @@ pub use systemd::{UNIT, restart, state, unit_file};
 #[cfg(windows)]
 use windows as platform;
 #[cfg(windows)]
-pub use windows::{restart, start as start_background, state};
+pub use windows::{
+    restart, restart_after_stop, start as start_background, start_when_stopped, state,
+};
 
 #[derive(Debug, Clone, Copy, Subcommand)]
 pub enum Action {

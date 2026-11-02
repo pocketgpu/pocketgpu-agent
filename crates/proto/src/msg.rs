@@ -179,6 +179,14 @@ pub mod control {
         /// first, without disks. Agents before it answer with an error, and the phone starts
         /// from the per-minute history instead.
         GetRecent,
+        /// Whether a newer agent release is out for this machine (board 23). Agents before
+        /// it answer with an error, and the phone shows no update.
+        CheckUpdate,
+        /// Installs this signed agent release, then restarts the agent (Shell only). The
+        /// reply comes before the restart.
+        InstallUpdate {
+            version: String,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +209,26 @@ pub mod control {
         Games(Vec<Game>),
         Status(Box<Status>),
         Recent(Vec<Sample>),
+        Update(UpdateCheck),
+        /// The new binary is in place; `restarting` is false when the agent can't restart
+        /// itself and someone has to on the machine.
+        Installed {
+            version: String,
+            restarting: bool,
+        },
+    }
+
+    /// The answer to `CheckUpdate`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct UpdateCheck {
+        pub current: String,
+        /// The newest release's version, without the `v`; `None` when it couldn't be looked
+        /// up.
+        pub latest: Option<String>,
+        /// `latest` is newer than `current`.
+        pub available: bool,
+        /// Why this machine can't update from a phone (a container, no service), in words.
+        pub blocked: Option<String>,
     }
 
     /// The answer to `Status`.
@@ -249,14 +277,17 @@ pub mod control {
                 | Self::ListGames
                 | Self::GetAlertSettings
                 | Self::SetPushTicket { .. }
+                | Self::CheckUpdate
                 | Self::Unpair => Permission::View,
                 Self::ListProcesses
                 | Self::KillProcess { .. }
                 | Self::RunAction { .. }
                 | Self::SetAlertSettings { .. } => Permission::Control,
-                Self::CreateAction(_) | Self::EditAction { .. } | Self::DeleteAction { .. } => {
-                    Permission::Shell
-                }
+                // Replacing the agent's own program is as much as terminal access.
+                Self::CreateAction(_)
+                | Self::EditAction { .. }
+                | Self::DeleteAction { .. }
+                | Self::InstallUpdate { .. } => Permission::Shell,
             }
         }
     }

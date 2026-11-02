@@ -139,6 +139,9 @@ pub enum Command {
         #[arg(long, value_name = "TAG")]
         version: Option<String>,
     },
+    /// Windows, after an update from a phone: wait for the agent to stop, then start it.
+    #[command(hide = true)]
+    RestartAgent,
     /// Start the agent at login: a systemd user service, a launchd agent on macOS, or a login entry on Windows.
     Service {
         #[command(subcommand)]
@@ -234,6 +237,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Update { check, version } => {
             update::run(cli.json, *check, version.as_deref()).await
         }
+        Command::RestartAgent => restart_agent(),
     }
 }
 
@@ -268,6 +272,16 @@ fn init_logging(daemon: bool) {
 fn background() -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     service::start_background(&exe)
+}
+
+#[cfg(windows)]
+fn restart_agent() -> anyhow::Result<()> {
+    service::start_when_stopped()
+}
+
+#[cfg(not(windows))]
+fn restart_agent() -> anyhow::Result<()> {
+    anyhow::bail!("restart-agent is for Windows; use pgpu service install")
 }
 
 #[cfg(not(windows))]

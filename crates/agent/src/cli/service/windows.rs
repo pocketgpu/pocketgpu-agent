@@ -53,6 +53,21 @@ pub fn restart() -> Result<()> {
     start(&installed_exe()?)
 }
 
+/// After an update from a phone: starts a detached `pocketgpu restart-agent` from the new
+/// binary, which waits for this agent to stop and then starts it again. The caller stops.
+pub fn restart_after_stop() -> Result<()> {
+    crate::winsys::spawn_detached(&installed_exe()?, &["restart-agent"])
+}
+
+/// `pocketgpu restart-agent`: waits up to 30 seconds for the running agent to stop, then
+/// starts it in the background.
+pub fn start_when_stopped() -> Result<()> {
+    if !wait_for(|| !running(), Duration::from_secs(30)) {
+        bail!("the agent did not stop for the update");
+    }
+    start(&installed_exe()?)
+}
+
 /// The binary to start. After `pgpu update` this process runs from `pocketgpu.old.exe`.
 fn installed_exe() -> Result<std::path::PathBuf> {
     let exe = std::env::current_exe().context("could not find the pocketgpu binary")?;

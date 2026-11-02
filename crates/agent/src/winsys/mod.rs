@@ -241,6 +241,20 @@ pub fn spawn_background(exe: &std::path::Path, log: &std::path::Path) -> Result<
     Ok(())
 }
 
+/// Starts `exe` with `args`, detached and with no window, its output dropped.
+pub fn spawn_detached(exe: &std::path::Path, args: &[&str]) -> Result<()> {
+    keep_std_handles_private();
+    Command::new(exe)
+        .args(args)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("could not start {}", exe.display()))?;
+    Ok(())
+}
+
 /// Free bytes for this user on the drive holding `path`, and the drive's root (`C:\\`).
 pub fn free_space(path: &std::path::Path) -> Option<(u64, String)> {
     use std::os::windows::ffi::OsStrExt;

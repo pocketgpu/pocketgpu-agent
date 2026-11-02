@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod processes;
 pub mod root;
 pub mod state;
+pub mod update;
 
 use std::sync::Arc;
 

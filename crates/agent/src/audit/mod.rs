@@ -33,6 +33,8 @@ pub enum Event {
     Container,
     /// `pgpu docker on` or `off`.
     DockerAccess,
+    /// A phone installed an agent release (board 23).
+    Update,
 }
 
 impl Event {
@@ -57,6 +59,7 @@ impl Event {
             Self::RelayChange => "relay_change",
             Self::Container => "container",
             Self::DockerAccess => "docker_access",
+            Self::Update => "update",
         }
     }
 }

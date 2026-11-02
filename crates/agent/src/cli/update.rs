@@ -23,11 +23,8 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
             "this agent runs in a container; pull the new image instead: docker pull ghcr.io/pocketgpu/pocketgpu"
         );
     }
-    let repo = std::env::var("PGPU_REPO").unwrap_or_else(|_| DEFAULT_REPO.into());
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("pocketgpu/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(300))
-        .build()?;
+    let repo = repo();
+    let client = client()?;
     let tag = match version {
         Some(v) => format!("v{}", v.trim_start_matches('v')),
         None => latest_tag(&client, &repo).await?,
@@ -56,22 +53,10 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let file = release::archive_name()
-        .with_context(|| format!("there is no release for {} CPUs", std::env::consts::ARCH))?;
-    let base = format!("https://github.com/{repo}/releases/download/{tag}");
-    let sums = download(&client, &format!("{base}/SHA256SUMS")).await?;
-    let signature = download(&client, &format!("{base}/SHA256SUMS.minisig")).await?;
-    release::verify_signature(
-        release::RELEASE_PUBKEY,
-        &sums,
-        &String::from_utf8_lossy(&signature),
-    )?;
     if !json {
-        println!("Downloading {file}");
+        println!("Downloading {tag}");
     }
-    let archive = download(&client, &format!("{base}/{file}")).await?;
-    release::verify_checksum(&String::from_utf8_lossy(&sums), &file, &archive)?;
-    let binary = release::extract_binary(&archive)?;
+    let binary = fetch(&client, &repo, &tag).await?;
 
     let exe = std::env::current_exe().context("could not find the running pocketgpu binary")?;
     install(&exe, &binary, &tag)?;
@@ -93,7 +78,37 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-async fn latest_tag(client: &reqwest::Client, repo: &str) -> Result<String> {
+/// The repository with the release files.
+pub fn repo() -> String {
+    std::env::var("PGPU_REPO").unwrap_or_else(|_| DEFAULT_REPO.into())
+}
+
+pub fn client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent(concat!("pocketgpu/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(300))
+        .build()?)
+}
+
+/// Downloads `tag`'s release for this machine and returns its binary once the signature on
+/// `SHA256SUMS` and the archive's checksum are good.
+pub async fn fetch(client: &reqwest::Client, repo: &str, tag: &str) -> Result<Vec<u8>> {
+    let file = release::archive_name()
+        .with_context(|| format!("there is no release for {} CPUs", std::env::consts::ARCH))?;
+    let base = format!("https://github.com/{repo}/releases/download/{tag}");
+    let sums = download(client, &format!("{base}/SHA256SUMS")).await?;
+    let signature = download(client, &format!("{base}/SHA256SUMS.minisig")).await?;
+    release::verify_signature(
+        release::RELEASE_PUBKEY,
+        &sums,
+        &String::from_utf8_lossy(&signature),
+    )?;
+    let archive = download(client, &format!("{base}/{file}")).await?;
+    release::verify_checksum(&String::from_utf8_lossy(&sums), &file, &archive)?;
+    release::extract_binary(&archive)
+}
+
+pub async fn latest_tag(client: &reqwest::Client, repo: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Release {
         tag_name: String,

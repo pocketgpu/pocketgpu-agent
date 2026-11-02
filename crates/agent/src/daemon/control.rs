@@ -113,6 +113,8 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
         Request::CreateAction(a) => actions::create(agent, peer, &a),
         Request::EditAction { id, action } => actions::edit(agent, peer, id, &action),
         Request::DeleteAction { id } => actions::delete(agent, peer, id),
+        Request::CheckUpdate => super::update::check().await,
+        Request::InstallUpdate { version } => super::update::install(agent, peer, &version).await,
         Request::Unpair => match super::devices::unpair(agent, peer.key) {
             Ok(_) => Response::Ok,
             Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
@@ -150,5 +152,7 @@ fn describe(req: &Request) -> String {
         Request::Unpair => "Unpair".into(),
         Request::ListRuns { .. } => "ListRuns".into(),
         Request::ListGames => "ListGames".into(),
+        Request::CheckUpdate => "CheckUpdate".into(),
+        Request::InstallUpdate { version } => format!("InstallUpdate {version}"),
     }
 }
