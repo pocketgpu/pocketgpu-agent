@@ -214,6 +214,7 @@ fn kind_name(kind: AlertKind) -> &'static str {
         AlertKind::Offline => "offline",
         AlertKind::OllamaDown => "ollama_down",
         AlertKind::DiskFull => "disk_full",
+        AlertKind::NewDevice => "new_device",
     }
 }
 

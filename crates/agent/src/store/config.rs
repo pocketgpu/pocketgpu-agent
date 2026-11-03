@@ -24,6 +24,8 @@ pub struct Config {
     pub alerts: AlertConfig,
     /// Alert channels besides push (F20): ntfy, Telegram, Discord, webhooks.
     pub notify: Vec<pocketgpu_proto::local::Channel>,
+    /// Remote-use notices on this computer's screen (F35); never off.
+    pub notices: pocketgpu_proto::local::NoticeLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +52,7 @@ impl Default for Config {
             push_url: pocketgpu_proto::default_push_url().into(),
             alerts: AlertConfig::default(),
             notify: Vec::new(),
+            notices: pocketgpu_proto::local::NoticeLevel::All,
         }
     }
 }

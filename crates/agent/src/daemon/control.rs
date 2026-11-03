@@ -115,6 +115,16 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
         Request::DeleteAction { id } => actions::delete(agent, peer, id),
         Request::CheckUpdate => super::update::check().await,
         Request::InstallUpdate { version } => super::update::install(agent, peer, &version).await,
+        Request::ListDevices => match super::devices::summaries(agent, &peer.key) {
+            Ok(d) => Response::Devices(d),
+            Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
+        },
+        Request::RevokeDevice { device } => {
+            match super::devices::revoke_by(agent, &peer.key, &device) {
+                Ok(device) => Response::Revoked { device },
+                Err(e) => Response::Error(Error::new(ErrorCode::Forbidden, e)),
+            }
+        }
         Request::Unpair => match super::devices::unpair(agent, peer.key) {
             Ok(_) => Response::Ok,
             Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
@@ -154,5 +164,7 @@ fn describe(req: &Request) -> String {
         Request::ListGames => "ListGames".into(),
         Request::CheckUpdate => "CheckUpdate".into(),
         Request::InstallUpdate { version } => format!("InstallUpdate {version}"),
+        Request::ListDevices => "ListDevices".into(),
+        Request::RevokeDevice { .. } => "RevokeDevice".into(),
     }
 }

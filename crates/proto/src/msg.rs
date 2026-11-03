@@ -187,6 +187,31 @@ pub mod control {
         InstallUpdate {
             version: String,
         },
+        /// The machine's paired devices, newest first (F35). Agents before it answer with
+        /// an error.
+        ListDevices,
+        /// Removes another device and closes its connections (Shell). Refused for the
+        /// caller itself (`Unpair`) and for the computer's own app.
+        RevokeDevice {
+            device: String,
+        },
+    }
+
+    /// A paired device, as a phone sees it (F35).
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct DeviceSummary {
+        /// The device's public key (hex).
+        pub id: String,
+        pub name: String,
+        pub platform: String,
+        pub permission: Permission,
+        pub paired_at_ms: i64,
+        pub last_seen_ms: Option<i64>,
+        pub connected: bool,
+        /// The computer's own PocketGPU app: shown, never revocable from a phone.
+        pub this_pc: bool,
+        /// The device asking.
+        pub you: bool,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -215,6 +240,10 @@ pub mod control {
         Installed {
             version: String,
             restarting: bool,
+        },
+        Devices(Vec<DeviceSummary>),
+        Revoked {
+            device: String,
         },
     }
 
@@ -281,13 +310,15 @@ pub mod control {
                 | Self::Unpair => Permission::View,
                 Self::ListProcesses
                 | Self::KillProcess { .. }
+                | Self::ListDevices
                 | Self::RunAction { .. }
                 | Self::SetAlertSettings { .. } => Permission::Control,
                 // Replacing the agent's own program is as much as terminal access.
                 Self::CreateAction(_)
                 | Self::EditAction { .. }
                 | Self::DeleteAction { .. }
-                | Self::InstallUpdate { .. } => Permission::Shell,
+                | Self::InstallUpdate { .. }
+                | Self::RevokeDevice { .. } => Permission::Shell,
             }
         }
     }

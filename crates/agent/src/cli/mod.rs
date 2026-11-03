@@ -15,6 +15,7 @@ pub mod docker;
 pub mod doctor;
 pub mod jobs;
 pub mod mcp;
+pub mod notices;
 pub mod notify;
 mod pair;
 pub mod relay;
@@ -131,6 +132,12 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<shell::Action>,
     },
+    /// Notices on this computer when another device uses it: status (the default), all or
+    /// fewer. They can't be turned off.
+    Notices {
+        #[command(subcommand)]
+        action: Option<notices::Action>,
+    },
     /// Send a report to PocketGPU if the agent crashes: status (the default), on or off.
     CrashReports {
         #[command(subcommand)]
@@ -236,6 +243,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Stop { job } => jobs::stop(&paths, cli.json, *job).await,
         Command::Service { action } => service::run(*action, cli.json),
         Command::Shell { action } => shell::run(&paths, cli.json, *action).await,
+        Command::Notices { action } => notices::run(&paths, cli.json, *action).await,
         Command::Docker { action } => docker::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,

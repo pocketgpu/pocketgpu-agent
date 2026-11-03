@@ -6,8 +6,9 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
-const MIGRATIONS: &[M<'static>] = &[M::up(
-    "
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(
+        "
     CREATE TABLE devices (
         device_id   TEXT PRIMARY KEY,
         name        TEXT NOT NULL CHECK (length(name) <= 40),
@@ -71,7 +72,18 @@ const MIGRATIONS: &[M<'static>] = &[M::up(
         PRIMARY KEY (rule, target)
     );
     ",
-)];
+    ),
+    // F35: the computer's own app (PairLocal) never shows a notice or appears as connected,
+    // and can't be revoked from a phone. Apps paired before this are found by their audit entry.
+    M::up(
+        "
+    ALTER TABLE devices ADD COLUMN this_pc INTEGER NOT NULL DEFAULT 0;
+    UPDATE devices SET this_pc = 1 WHERE device_id IN (
+        SELECT device_id FROM audit WHERE event = 'pair' AND result = 'shell · on this PC'
+    );
+    ",
+    ),
+];
 
 pub fn open(path: &Path) -> Result<Connection> {
     let mut conn =

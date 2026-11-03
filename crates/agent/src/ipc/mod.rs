@@ -164,6 +164,17 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
                 Err(e) => Response::Error(e),
             }
         }
+        Request::Connected => match crate::daemon::devices::connected(agent) {
+            Ok(d) => Response::Connected(d),
+            Err(e) => Response::Error(format!("{e:#}")),
+        },
+        Request::GetNotices => {
+            Response::Notices(agent.config.read().expect("config lock poisoned").notices)
+        }
+        Request::SetNotices(level) => match crate::notices::set_level(agent, level) {
+            Ok(level) => Response::Notices(level),
+            Err(e) => Response::Error(format!("{e:#}")),
+        },
         Request::RevokeDevice { device } => match crate::daemon::devices::revoke(agent, &device) {
             Ok(d) => Response::Device(d),
             Err(e) => Response::Error(e),

@@ -29,6 +29,7 @@ pub fn pair(db: &Connection, device: &str, name: &str) -> Result<(), String> {
         Permission::Shell,
         None,
     )
+    .and_then(|()| devices::mark_this_pc(db, &device))
     .and_then(|()| audit::record(db, &device, Event::Pair, &name, "shell · on this PC"))
     .map_err(|e| format!("{e:#}"))
 }

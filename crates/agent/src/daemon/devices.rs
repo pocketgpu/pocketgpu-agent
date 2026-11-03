@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use iroh::PublicKey;
 use pocketgpu_proto::Permission;
-use pocketgpu_proto::local::DeviceInfo;
+use pocketgpu_proto::local::{Activity, ConnectedDevice, DeviceInfo, Via};
+use pocketgpu_proto::msg::control::DeviceSummary;
 
 use super::state::Agent;
 use crate::audit::{self, Event};
@@ -108,6 +109,80 @@ pub fn revoke(agent: &Agent, query: &str) -> Result<DeviceInfo, String> {
     }
     let _ = audit::record(&agent.db(), "local", Event::Revoke, &d.name, "revoked");
     Ok(before)
+}
+
+/// Devices connected now, without this computer's own app (F35, the tray's list).
+pub fn connected(agent: &Agent) -> anyhow::Result<Vec<ConnectedDevice>> {
+    let all = devices::list(&agent.db())?;
+    let mut out: Vec<ConnectedDevice> = agent
+        .connected_keys()
+        .into_iter()
+        .filter_map(|(k, direct)| {
+            let d = all.iter().find(|d| d.device_id == k.to_string())?;
+            (!d.this_pc).then(|| ConnectedDevice {
+                id: d.device_id.clone(),
+                name: d.name.clone(),
+                platform: d.platform.clone(),
+                activity: if agent.shells.has_open(&k) {
+                    Activity::Terminal
+                } else {
+                    Activity::Watching
+                },
+                via: if direct { Via::Direct } else { Via::Relay },
+            })
+        })
+        .collect();
+    out.sort_by_key(|d| d.name.to_lowercase());
+    Ok(out)
+}
+
+/// The machine's devices as a phone sees them, newest first (F35).
+pub fn summaries(agent: &Agent, caller: &PublicKey) -> anyhow::Result<Vec<DeviceSummary>> {
+    let mut all = devices::list(&agent.db())?;
+    all.reverse();
+    Ok(all
+        .iter()
+        .map(|d| DeviceSummary {
+            id: d.device_id.clone(),
+            name: d.name.clone(),
+            platform: d.platform.clone(),
+            permission: d.permission.parse().unwrap_or(Permission::View),
+            paired_at_ms: d.paired_at_ms,
+            last_seen_ms: d.last_seen_ms,
+            connected: key_of(d).is_some_and(|k| agent.is_connected(&k)),
+            this_pc: d.this_pc,
+            you: d.device_id == caller.to_string(),
+        })
+        .collect())
+}
+
+/// A phone (with Shell) removing another device (F35). Never itself, never this computer's
+/// own app; audited with the caller, so the computer shows a notice.
+pub fn revoke_by(agent: &Agent, caller: &PublicKey, device: &str) -> Result<String, String> {
+    let d = devices::get(&agent.db(), device)
+        .map_err(|e| format!("{e:#}"))?
+        .ok_or_else(|| "no such device on this machine".to_string())?;
+    if d.device_id == caller.to_string() {
+        return Err("to remove this device, unpair it instead".into());
+    }
+    if d.this_pc {
+        return Err(
+            "this is the computer's own PocketGPU app; it can only be removed at the computer"
+                .into(),
+        );
+    }
+    devices::remove(&agent.db(), &d.device_id).map_err(|e| format!("{e:#}"))?;
+    if let Some(k) = key_of(&d) {
+        agent.drop_connections(&k);
+    }
+    let _ = audit::record(
+        &agent.db(),
+        &caller.to_string(),
+        Event::Revoke,
+        &d.name,
+        crate::notices::REVOKED_BY_DEVICE,
+    );
+    Ok(d.device_id)
 }
 
 /// A phone removing itself. The reply goes out before the connection closes.

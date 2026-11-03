@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod jobs;
 #[cfg(target_os = "macos")]
 pub mod macsys;
+pub mod notices;
 pub mod pair;
 pub mod release;
 pub mod shell;

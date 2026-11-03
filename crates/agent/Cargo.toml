@@ -49,6 +49,10 @@ bytes = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+# Remote-use notices on this computer's screen (F35).
+notify-rust = "4.18"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # IOKit and IOReport GPU stats on Apple silicon (F26).
 core-foundation-sys = "0.8"

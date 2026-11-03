@@ -173,6 +173,12 @@ impl Shells {
         out
     }
 
+    /// Whether `owner` has a terminal open (F35).
+    pub fn has_open(&self, owner: &PublicKey) -> bool {
+        let table = self.table.lock().expect("shell lock");
+        table.sessions.values().any(|s| &s.owner == owner)
+    }
+
     pub fn count(&self) -> usize {
         self.table.lock().expect("shell lock").sessions.len()
     }

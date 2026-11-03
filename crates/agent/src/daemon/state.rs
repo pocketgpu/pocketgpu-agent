@@ -157,6 +157,26 @@ impl Agent {
             .is_some_and(|list| list.iter().any(|c| c.close_reason().is_none()))
     }
 
+    /// Devices with an open connection now, and whether one goes direct (F35).
+    pub fn connected_keys(&self) -> Vec<(PublicKey, bool)> {
+        let map = self.connections.lock().expect("connection lock poisoned");
+        map.iter()
+            .filter_map(|(k, list)| {
+                let open: Vec<_> = list.iter().filter(|c| c.close_reason().is_none()).collect();
+                if open.is_empty() {
+                    return None;
+                }
+                let direct = open.iter().any(|c| {
+                    c.paths()
+                        .iter()
+                        .find(|p| p.is_selected())
+                        .is_some_and(|p| !p.is_relay())
+                });
+                Some((*k, direct))
+            })
+            .collect()
+    }
+
     pub fn connected_devices(&self) -> u32 {
         let mut map = self.connections.lock().expect("connection lock poisoned");
         map.retain(|_, list| {

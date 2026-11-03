@@ -120,6 +120,57 @@ pub enum Request {
         device: String,
         name: String,
     },
+    /// Devices with an open connection now, without this PC's own app (F35). Replies
+    /// `Connected`.
+    Connected,
+    /// The notice level (F35). Replies `Notices`.
+    GetNotices,
+    /// Sets the notice level; only possible here, never from a phone. Replies `Notices`.
+    SetNotices(NoticeLevel),
+}
+
+/// How many remote actions show a notice on this computer (F35). There is no off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeLevel {
+    /// New devices, terminals, stopped processes, quick actions and containers.
+    #[default]
+    All,
+    /// Only new devices and terminals.
+    Fewer,
+}
+
+impl NoticeLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Fewer => "fewer",
+        }
+    }
+}
+
+/// What a connected device is doing (F35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Activity {
+    Watching,
+    Terminal,
+}
+
+/// How a connected device reaches this computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Via {
+    Direct,
+    Relay,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConnectedDevice {
+    /// The device's public key (hex).
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub activity: Activity,
+    pub via: Via,
 }
 
 /// Where the agent sends alerts besides the push server (F20).
@@ -248,6 +299,8 @@ pub enum Response {
         name: String,
         relays: Vec<String>,
     },
+    Connected(Vec<ConnectedDevice>),
+    Notices(NoticeLevel),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

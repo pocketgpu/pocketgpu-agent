@@ -82,6 +82,7 @@ pub async fn run(paths: Paths) -> Result<()> {
         .ollama_addr
         .clone();
     let sampler = tokio::spawn(agent.sampler.clone().run(agent.db.clone(), ollama_addr));
+    crate::notices::start(agent.clone());
     let ipc = tokio::spawn(crate::ipc::listen(agent.clone()));
 
     // A local socket that can't be opened is a failure: the service manager restarts the

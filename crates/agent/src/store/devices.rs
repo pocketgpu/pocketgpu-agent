@@ -15,6 +15,8 @@ pub struct Device {
     pub permission: String,
     pub paired_at_ms: i64,
     pub last_seen_ms: Option<i64>,
+    /// The PocketGPU app on this computer (F35).
+    pub this_pc: bool,
 }
 
 pub fn platform_str(p: Platform) -> &'static str {
@@ -53,9 +55,18 @@ pub fn upsert(
     Ok(())
 }
 
+/// Marks the PocketGPU app on this computer (F35).
+pub fn mark_this_pc(db: &Connection, device_id: &str) -> Result<()> {
+    db.execute(
+        "UPDATE devices SET this_pc = 1 WHERE device_id = ?1",
+        [device_id],
+    )?;
+    Ok(())
+}
+
 pub fn list(db: &Connection) -> Result<Vec<Device>> {
     let mut stmt = db.prepare(
-        "SELECT device_id, name, platform, permission, paired_at, last_seen FROM devices ORDER BY paired_at",
+        "SELECT device_id, name, platform, permission, paired_at, last_seen, this_pc FROM devices ORDER BY paired_at",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Device {
@@ -65,6 +76,7 @@ pub fn list(db: &Connection) -> Result<Vec<Device>> {
             permission: r.get(3)?,
             paired_at_ms: r.get(4)?,
             last_seen_ms: r.get(5)?,
+            this_pc: r.get::<_, i64>(6)? != 0,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)

@@ -33,6 +33,20 @@ fn store_error(e: StoreError) -> Error {
 }
 
 /// `"#3 Restart vLLM"`: the action's id and name, never its command.
+/// `/usr/bin/python3 /data/train.py --lr 3e-4` → `python3 train.py`: what a person
+/// recognises, for the notice on the computer (F35).
+fn short_command(command: &str) -> String {
+    let base = |s: &str| s.rsplit(['/', '\\']).next().unwrap_or(s).to_string();
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return String::new();
+    };
+    match parts.next() {
+        Some(arg) if !arg.starts_with('-') => format!("{} {}", base(program), base(arg)),
+        _ => base(program),
+    }
+}
+
 fn label(a: &Action) -> String {
     format!("#{} {}", a.id, a.name)
 }
@@ -175,7 +189,14 @@ pub async fn run(agent: &Arc<Agent>, peer: &Peer, id: u64) -> Response {
 pub fn kill(agent: &Arc<Agent>, peer: &Peer, pid: u32) -> Response {
     let target = format!("pid {pid}");
     match processes::kill(agent, pid) {
-        Ok(_command) => {
+        Ok(command) => {
+            // The notice on the computer names what was stopped (F35).
+            let name = short_command(&command);
+            let target = if name.is_empty() {
+                target
+            } else {
+                format!("{name} · {target}")
+            };
             audit(agent, peer, Event::Kill, &target, "sigterm sent");
             Response::Ok
         }
@@ -183,5 +204,20 @@ pub fn kill(agent: &Arc<Agent>, peer: &Peer, pid: u32) -> Response {
             audit(agent, peer, Event::Kill, &target, &e.message);
             Response::Error(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_command;
+
+    #[test]
+    fn short_commands_for_notices() {
+        assert_eq!(
+            short_command("/usr/bin/python3 /data/train.py --lr 3"),
+            "python3 train.py"
+        );
+        assert_eq!(short_command("C:\\x\\ollama.exe --serve"), "ollama.exe");
+        assert_eq!(short_command(""), "");
     }
 }

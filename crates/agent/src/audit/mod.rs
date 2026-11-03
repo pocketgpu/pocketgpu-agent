@@ -91,6 +91,7 @@ pub fn record(
             clean(result)
         ],
     )?;
+    crate::notices::observe(db, device, event, target, result);
     Ok(())
 }
 

@@ -4,6 +4,7 @@
 pub mod channels;
 pub mod client;
 pub mod heartbeat;
+pub mod new_device;
 pub mod rules;
 pub mod sender;
 pub mod settings;

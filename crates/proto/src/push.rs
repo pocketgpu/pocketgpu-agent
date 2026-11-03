@@ -38,12 +38,14 @@ pub enum AlertKind {
     Offline,
     OllamaDown,
     DiskFull,
+    /// A new device paired with the machine (F35): free, it's about safety.
+    NewDevice,
 }
 
 impl AlertKind {
-    /// Only job alerts reach Free tickets.
+    /// Only job alerts and new-device alerts reach Free tickets.
     pub fn needs_pro(self) -> bool {
-        !matches!(self, Self::JobEnd)
+        !matches!(self, Self::JobEnd | Self::NewDevice)
     }
 }
 
