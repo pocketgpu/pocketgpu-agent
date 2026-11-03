@@ -47,7 +47,12 @@ pub async fn run(paths: Paths) -> Result<()> {
     }
     let _ = paths.create_all();
     crash::install_hook(&paths);
+    #[cfg(windows)]
+    let data_dir = paths.data_dir.clone();
     let agent = Agent::open(paths, collect::from_env())?;
+    // The PocketGPU app on this PC follows the agent's version (board 29).
+    #[cfg(windows)]
+    tokio::spawn(crate::desktop_app::keep_in_step(data_dir));
     // The last run's crash, if it crashed and crash reports are on (board 25).
     tokio::spawn({
         let agent = agent.clone();

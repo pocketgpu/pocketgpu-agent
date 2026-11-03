@@ -6,6 +6,7 @@ pub mod audit;
 pub mod cli;
 pub mod collect;
 pub mod daemon;
+pub mod desktop_app;
 pub mod docker;
 pub mod games;
 pub mod ipc;

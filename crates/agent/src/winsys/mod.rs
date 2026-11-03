@@ -21,7 +21,7 @@ const RUN_VALUE: &str = "PocketGPU";
 
 /// A System32 tool by its full path: a bare name would also be looked up next to the agent's
 /// own exe and on PATH.
-fn quiet(program: &str) -> Command {
+pub(crate) fn quiet(program: &str) -> Command {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
     let exe = std::path::Path::new(&root)
         .join("System32")
