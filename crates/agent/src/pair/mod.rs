@@ -2,6 +2,7 @@
 
 pub mod code;
 pub mod handler;
+pub mod local;
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -285,7 +286,7 @@ async fn decide<W: AsyncWrite + Unpin>(
 
 /// The name a phone gave itself, as shown in prompts and lists: no control characters (which
 /// could redraw the terminal prompt) or quotes, at most 40 characters.
-fn clean_name(name: &str) -> String {
+pub(crate) fn clean_name(name: &str) -> String {
     let name: String = name
         .chars()
         .filter(|c| {

@@ -112,6 +112,14 @@ pub enum Request {
         id: u64,
         pgid: Option<u32>,
     },
+    /// The PocketGPU app on this same PC pairs itself (F34), with no code: the local socket
+    /// already lets the person at this PC approve any phone. `device` is the app's public key
+    /// (64 hex characters), `name` at most 40 characters. A new device gets Shell; one already
+    /// paired keeps its permission. Replies `PairedLocal`.
+    PairLocal {
+        device: String,
+        name: String,
+    },
 }
 
 /// Where the agent sends alerts besides the push server (F20).
@@ -233,6 +241,12 @@ pub enum Response {
     /// Whether crash reports are on.
     CrashReports {
         on: bool,
+    },
+    /// The app on this PC is paired: what it needs to connect like to any machine.
+    PairedLocal {
+        agent_id: String,
+        name: String,
+        relays: Vec<String>,
     },
 }
 

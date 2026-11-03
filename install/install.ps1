@@ -2,12 +2,12 @@
 #   irm https://pocketgpu.app/install.ps1 | iex
 #
 # Installs pocketgpu.exe (and the `pgpu` alias) into %LOCALAPPDATA%\PocketGPU\bin, adds it to
-# your PATH and starts the agent at login, then offers the tray app and pairing a phone.
+# your PATH and starts the agent at login, then offers the PocketGPU app and pairing a phone.
 # No Administrator. Settings, all optional:
 #   $env:PGPU_VERSION = 'v1.2.0'      a release tag instead of the latest
 #   $env:PGPU_INSTALL_DIR = 'C:\path' instead of %LOCALAPPDATA%\PocketGPU\bin
 #   $env:PGPU_NO_SERVICE = '1'        install only; don't start the agent
-#   $env:PGPU_NO_TRAY = '1'           don't offer the tray app (servers, scripts)
+#   $env:PGPU_NO_TRAY = '1'           don't offer the PocketGPU app (servers, scripts)
 #   $env:PGPU_REPO = 'owner/name'     GitHub repository with the releases
 #   $env:PGPU_DOWNLOAD_URL = 'url'    a mirror holding the release files
 
@@ -153,26 +153,31 @@ function Ask-CrashReports($exe) {
     }
 }
 
-# The tray app and agent window, from the same release. Its installer carries the agent too,
-# but leaves this one alone since it is as new.
+# The PocketGPU app (F34): this PC's agent in a window and the tray, and every other machine
+# like on the phone. Its installer carries the agent too, but leaves this one alone since it
+# is as new, and replaces the older "PocketGPU Agent" app.
 function Install-Tray($base, $tmp) {
-    $app = Join-Path $env:LOCALAPPDATA 'PocketGPU Agent'
-    if (-not (Ask 'Also install the tray app (status, pairing and settings in a window)?')) { return }
+    if (-not (Ask 'Also install the PocketGPU app (this PC and your other machines in a window)?')) { return }
     Write-Host ''
-    $setup = 'PocketGPU-Agent-x86_64-setup.exe'
-    Start-Step 'Downloading the tray app'
+    $setup = 'PocketGPU-x86_64-setup.exe'
+    Start-Step 'Downloading the PocketGPU app'
     Write-Host ''
     Save-File "$base/$setup" (Join-Path $tmp $setup)
     Test-Checksum $tmp $setup
-    Start-Step 'Installing the tray app'
+    Start-Step 'Installing the PocketGPU app'
     Start-Process -FilePath (Join-Path $tmp $setup) -ArgumentList '/S' -Wait
-    $exe = Get-ChildItem $app -Filter *.exe -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketGPU'
+    $dir = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallLocation
+    $exe = if ($dir) {
+        Get-ChildItem ($dir.Trim('"')) -Filter *.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike 'uninstall*' -and $_.Name -ne 'pocketgpu.exe' } |
+            Select-Object -First 1
+    }
     if ($exe) {
         Start-Process $exe.FullName
         Done 'running next to the clock'
     } else {
-        Done 'start "PocketGPU Agent" from the Start menu'
+        Done 'start "PocketGPU" from the Start menu'
     }
 }
 
@@ -185,7 +190,7 @@ function Install-PocketGPU {
         else { "https://github.com/$script:Repo/releases/latest/download" }
     $file = 'pocketgpu-x86_64-windows.tar.gz'
     $trayOffer = -not $env:PGPU_NO_TRAY -and [Environment]::UserInteractive -and
-        -not (Test-Path (Join-Path $env:LOCALAPPDATA 'PocketGPU Agent'))
+        -not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketGPU')
     if ($trayOffer) { $script:Steps = 7 }
 
     Start-Step 'Checking this PC'

@@ -203,6 +203,22 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
             Err(e) => Response::Error(format!("{e:#}")),
         },
         Request::ListChannels => channels(agent),
+        Request::PairLocal { device, name } => {
+            let relays = agent
+                .config
+                .read()
+                .expect("config lock poisoned")
+                .relays
+                .clone();
+            match crate::pair::local::pair(&agent.db(), &device, &name) {
+                Ok(()) => Response::PairedLocal {
+                    agent_id: agent.identity.agent_id().to_string(),
+                    name: agent.name(),
+                    relays,
+                },
+                Err(e) => Response::Error(e),
+            }
+        }
         Request::GetRelays => Response::Relays(
             agent
                 .config
