@@ -26,6 +26,8 @@ pub struct Config {
     pub notify: Vec<pocketgpu_proto::local::Channel>,
     /// Remote-use notices on this computer's screen (F35); never off.
     pub notices: pocketgpu_proto::local::NoticeLevel,
+    /// Restart, sleep and shut down from phones (F37). Off until `pgpu power on` here.
+    pub power: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,6 +55,7 @@ impl Default for Config {
             alerts: AlertConfig::default(),
             notify: Vec::new(),
             notices: pocketgpu_proto::local::NoticeLevel::All,
+            power: false,
         }
     }
 }

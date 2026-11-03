@@ -30,12 +30,14 @@ pub enum Kind {
     Action,
     Container,
     Revoke,
+    /// A restart, sleep or shutdown counting down (F37).
+    Power,
 }
 
 impl Kind {
     /// Shown at every level, at once, never grouped.
     pub fn always(self) -> bool {
-        matches!(self, Self::Pair | Self::Terminal)
+        matches!(self, Self::Pair | Self::Terminal | Self::Power)
     }
 }
 
@@ -56,6 +58,8 @@ pub struct Notice {
     pub body: String,
     /// The pairing notice offers Revoke and It's mine for this device.
     pub revoke: Option<(String, String)>,
+    /// The power countdown's notice offers Cancel (F37).
+    pub cancel_power: bool,
 }
 
 /// What `audit::record` passes on.
@@ -146,9 +150,16 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         }
         Event::Container if result == "ok" => Kind::Container,
         Event::Revoke if result == REVOKED_BY_DEVICE => Kind::Revoke,
+        Event::Power if result == crate::power::COUNTING_DOWN => Kind::Power,
         _ => return None,
     })
 }
+
+/// How to stop a power countdown from the notice: its button, or on macOS the command line.
+#[cfg(not(target_os = "macos"))]
+const CANCEL_HINT: &str = "To stop it, press Cancel.";
+#[cfg(target_os = "macos")]
+const CANCEL_HINT: &str = "To stop it, run: pgpu power cancel";
 
 /// How to revoke from the notice: its button, or on macOS (no buttons yet) the app.
 #[cfg(not(target_os = "macos"))]
@@ -222,11 +233,23 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             format!("{who} revoked {}", r.target),
             format!("{} can no longer connect to {machine}.", r.target),
         ),
+        Kind::Power => {
+            let what = match r.target.as_str() {
+                "restart" => "restarting this computer",
+                "sleep" => "putting this computer to sleep",
+                _ => "shutting down this computer",
+            };
+            (
+                format!("{who} is {what} in 30 seconds"),
+                format!("Save your work. {CANCEL_HINT}"),
+            )
+        }
     };
     Notice {
         title,
         body,
         revoke: (r.kind == Kind::Pair).then(|| (r.device.clone(), r.name.clone())),
+        cancel_power: r.kind == Kind::Power,
     }
 }
 
@@ -247,7 +270,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
         Kind::Action => ("ran", "quick actions"),
         Kind::Container => ("changed", "containers"),
         Kind::Revoke => ("revoked", "devices"),
-        Kind::Pair | Kind::Terminal => ("used", "things"),
+        Kind::Pair | Kind::Terminal | Kind::Power => ("used", "things"),
     };
     Notice {
         title: format!("{who} {verb} {count} {noun}"),
@@ -256,6 +279,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
             count - 1
         ),
         revoke: None,
+        cancel_power: false,
     }
 }
 

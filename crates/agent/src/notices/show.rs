@@ -14,6 +14,8 @@ use crate::daemon::state::Agent;
 const REVOKE: &str = "revoke";
 #[cfg(not(target_os = "macos"))]
 const KEEP: &str = "keep";
+#[cfg(not(target_os = "macos"))]
+const CANCEL: &str = "cancel";
 
 pub fn show(agent: &Arc<Agent>, notice: Notice) {
     if !session() {
@@ -72,6 +74,8 @@ fn display(agent: &Arc<Agent>, notice: &Notice) -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     if notice.revoke.is_some() {
         n.action(REVOKE, "Revoke").action(KEEP, "It's mine");
+    } else if notice.cancel_power {
+        n.action(CANCEL, "Cancel");
     }
     let handle = n.show()?;
     #[cfg(not(target_os = "macos"))]
@@ -79,6 +83,20 @@ fn display(agent: &Arc<Agent>, notice: &Notice) -> anyhow::Result<()> {
         handle.wait_for_action(|action| {
             if action == REVOKE {
                 revoke(agent, device, name);
+            }
+        });
+    } else if notice.cancel_power {
+        handle.wait_for_action(|action| {
+            if action == CANCEL && agent.power.cancel(agent) {
+                let n = Notice {
+                    title: "Cancelled".into(),
+                    body: "Nothing will happen. The device that asked is told.".into(),
+                    revoke: None,
+                    cancel_power: false,
+                };
+                if let Err(e) = display(agent, &n) {
+                    tracing::warn!("could not show a notice: {e:#}");
+                }
             }
         });
     }
@@ -102,6 +120,7 @@ fn revoke(agent: &Arc<Agent>, device: &str, name: &str) {
                 title: format!("{name} was revoked"),
                 body: "It can only come back by pairing again at this computer.".into(),
                 revoke: None,
+                cancel_power: false,
             };
             if let Err(e) = display(agent, &n) {
                 tracing::warn!("could not show a notice: {e:#}");

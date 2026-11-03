@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod notices;
 pub mod notify;
 mod pair;
+pub mod power;
 pub mod relay;
 pub mod service;
 pub mod shell;
@@ -132,6 +133,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<shell::Action>,
     },
+    /// Restart, sleep and shut down from phones: status (the default), on, off or cancel.
+    Power {
+        #[command(subcommand)]
+        action: Option<power::Action>,
+    },
     /// Notices on this computer when another device uses it: status (the default), all or
     /// fewer. They can't be turned off.
     Notices {
@@ -244,6 +250,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Service { action } => service::run(*action, cli.json),
         Command::Shell { action } => shell::run(&paths, cli.json, *action).await,
         Command::Notices { action } => notices::run(&paths, cli.json, *action).await,
+        Command::Power { action } => power::run(&paths, cli.json, *action).await,
         Command::Docker { action } => docker::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,

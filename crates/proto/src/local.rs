@@ -127,6 +127,14 @@ pub enum Request {
     GetNotices,
     /// Sets the notice level; only possible here, never from a phone. Replies `Notices`.
     SetNotices(NoticeLevel),
+    /// Power actions from phones (F37). Replies `Power`.
+    GetPower,
+    /// Turns power actions from phones on or off; only here. Replies `Power`.
+    SetPower {
+        on: bool,
+    },
+    /// Stops a restart, sleep or shutdown that is counting down. Replies `Ok`.
+    CancelPower,
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -301,6 +309,7 @@ pub enum Response {
     },
     Connected(Vec<ConnectedDevice>),
     Notices(NoticeLevel),
+    Power(crate::msg::control::PowerState),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

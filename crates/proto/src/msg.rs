@@ -195,6 +195,66 @@ pub mod control {
         RevokeDevice {
             device: String,
         },
+        /// Whether power actions are on here, what the system allows and whether the machine
+        /// comes back by itself (F37). Agents before it answer with an error.
+        GetPower,
+        /// Restart, sleep or shut down after a 30-second countdown on the machine (Control,
+        /// and only when turned on there). Replies `PowerScheduled`.
+        PowerAction {
+            action: PowerKind,
+        },
+    }
+
+    /// F37: what a phone may ask the machine to do with its power.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum PowerKind {
+        Restart,
+        Sleep,
+        ShutDown,
+    }
+
+    impl PowerKind {
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::Restart => "restart",
+                Self::Sleep => "sleep",
+                Self::ShutDown => "shut down",
+            }
+        }
+    }
+
+    /// Whether the agent starts again by itself after a restart.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum ComesBack {
+        Yes,
+        /// Windows waits at the sign-in screen: automatic sign-in is off.
+        NoAutoSignIn,
+        /// Linux: the agent's service starts at login only (no lingering).
+        NoLinger,
+        Unknown,
+    }
+
+    /// The last power action and how it went.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct PowerOutcome {
+        pub action: PowerKind,
+        /// Who asked: a device's name, or "this computer".
+        pub by: String,
+        pub at_ms: i64,
+        /// `started`, `cancelled`, or why the system refused.
+        pub result: String,
+    }
+
+    /// The answer to `GetPower`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct PowerState {
+        pub enabled: bool,
+        pub comes_back: ComesBack,
+        /// What the system allows the agent's user; the rest is refused up front.
+        pub allowed: Vec<PowerKind>,
+        /// The action counting down, and when it runs (ms).
+        pub pending: Option<(PowerKind, i64)>,
+        pub last: Option<PowerOutcome>,
     }
 
     /// A paired device, as a phone sees it (F35).
@@ -244,6 +304,11 @@ pub mod control {
         Devices(Vec<DeviceSummary>),
         Revoked {
             device: String,
+        },
+        Power(PowerState),
+        /// The action runs at this time unless someone at the machine cancels.
+        PowerScheduled {
+            at_ms: i64,
         },
     }
 
@@ -307,10 +372,12 @@ pub mod control {
                 | Self::GetAlertSettings
                 | Self::SetPushTicket { .. }
                 | Self::CheckUpdate
+                | Self::GetPower
                 | Self::Unpair => Permission::View,
                 Self::ListProcesses
                 | Self::KillProcess { .. }
                 | Self::ListDevices
+                | Self::PowerAction { .. }
                 | Self::RunAction { .. }
                 | Self::SetAlertSettings { .. } => Permission::Control,
                 // Replacing the agent's own program is as much as terminal access.

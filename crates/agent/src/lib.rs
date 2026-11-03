@@ -15,6 +15,7 @@ pub mod jobs;
 pub mod macsys;
 pub mod notices;
 pub mod pair;
+pub mod power;
 pub mod release;
 pub mod shell;
 pub mod store;

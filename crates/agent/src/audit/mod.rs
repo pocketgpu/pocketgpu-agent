@@ -35,6 +35,10 @@ pub enum Event {
     DockerAccess,
     /// A phone installed an agent release (board 23).
     Update,
+    /// A restart, sleep or shutdown: asked, cancelled or run (F37).
+    Power,
+    /// `pgpu power on` or `off`.
+    PowerAccess,
 }
 
 impl Event {
@@ -60,6 +64,8 @@ impl Event {
             Self::Container => "container",
             Self::DockerAccess => "docker_access",
             Self::Update => "update",
+            Self::Power => "power",
+            Self::PowerAccess => "power_access",
         }
     }
 }

@@ -38,6 +38,8 @@ pub struct Agent {
     pub started_ms: i64,
     /// Alerts are held until this time (Unix ms); 0 when they aren't.
     pub alerts_paused_until: std::sync::atomic::AtomicI64,
+    /// A restart, sleep or shutdown counting down (F37).
+    pub power: crate::power::Power,
     /// Fired alerts, for apps subscribed over `pgpu/events/1`.
     pub events: tokio::sync::broadcast::Sender<pocketgpu_proto::msg::events::Alert>,
     /// Open connections per phone, so revoking can drop them at once.
@@ -88,6 +90,7 @@ impl Agent {
             stop: tokio::sync::Notify::new(),
             started_ms: crate::store::db::now_ms(),
             alerts_paused_until: std::sync::atomic::AtomicI64::new(0),
+            power: Default::default(),
             events: tokio::sync::broadcast::channel(32).0,
             connections: Mutex::new(HashMap::new()),
         })

@@ -125,6 +125,25 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 Err(e) => Response::Error(Error::new(ErrorCode::Forbidden, e)),
             }
         }
+        Request::GetPower => Response::Power(crate::power::state(agent)),
+        Request::PowerAction { action } => {
+            let device = peer.key.to_string();
+            let by = crate::store::devices::get(&agent.db(), &device)
+                .ok()
+                .flatten()
+                .map_or_else(|| "a phone".to_string(), |d| d.name);
+            match crate::power::request(
+                agent,
+                &device,
+                &by,
+                action,
+                crate::power::COUNTDOWN,
+                crate::power::os::run,
+            ) {
+                Ok(at_ms) => Response::PowerScheduled { at_ms },
+                Err(e) => Response::Error(Error::new(ErrorCode::Forbidden, e)),
+            }
+        }
         Request::Unpair => match super::devices::unpair(agent, peer.key) {
             Ok(_) => Response::Ok,
             Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
@@ -166,5 +185,7 @@ fn describe(req: &Request) -> String {
         Request::InstallUpdate { version } => format!("InstallUpdate {version}"),
         Request::ListDevices => "ListDevices".into(),
         Request::RevokeDevice { .. } => "RevokeDevice".into(),
+        Request::GetPower => "GetPower".into(),
+        Request::PowerAction { action } => format!("PowerAction {}", action.as_str()),
     }
 }
