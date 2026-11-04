@@ -62,6 +62,10 @@ fn command(action: PowerKind) -> (&'static str, &'static [&'static str]) {
 /// What the system lets this user do without a password. On Linux logind answers per
 /// action; elsewhere a signed-in user may do all three.
 pub fn allowed() -> Vec<PowerKind> {
+    // End-to-end tests run nothing for real (`PGPU_FAKE_POWER`), whatever the runner allows.
+    if std::env::var_os("PGPU_FAKE_POWER").is_some() {
+        return ALL.to_vec();
+    }
     #[cfg(target_os = "linux")]
     {
         ALL.into_iter()

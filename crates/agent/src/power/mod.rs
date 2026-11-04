@@ -21,6 +21,21 @@ pub const COUNTDOWN: Duration = Duration::from_secs(30);
 /// What runs the system's command; faked in tests.
 pub type Runner = fn(PowerKind) -> Result<(), String>;
 
+/// The system's commands, or with `PGPU_FAKE_POWER` set (end-to-end tests on CI runners,
+/// which must not restart) only a log line.
+pub fn runner() -> Runner {
+    if std::env::var_os("PGPU_FAKE_POWER").is_some() {
+        fake
+    } else {
+        os::run
+    }
+}
+
+fn fake(action: PowerKind) -> Result<(), String> {
+    tracing::info!("PGPU_FAKE_POWER: would {} now", action.as_str());
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct Power {
     inner: Mutex<Inner>,

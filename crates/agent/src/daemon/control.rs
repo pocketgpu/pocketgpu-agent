@@ -138,7 +138,7 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 &by,
                 action,
                 crate::power::COUNTDOWN,
-                crate::power::os::run,
+                crate::power::runner(),
             ) {
                 Ok(at_ms) => Response::PowerScheduled { at_ms },
                 Err(e) => Response::Error(Error::new(ErrorCode::Forbidden, e)),

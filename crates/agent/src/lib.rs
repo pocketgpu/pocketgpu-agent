@@ -27,6 +27,7 @@ pub mod winsys;
 /// switches, the restricted-token marker and the service manager's variables.
 pub const AGENT_ONLY_ENV: &[&str] = &[
     "PGPU_FAKE_GPU",
+    "PGPU_FAKE_POWER",
     "PGPU_UNELEVATED",
     "RUST_LOG",
     "INVOCATION_ID",
