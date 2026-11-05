@@ -84,6 +84,14 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
             }
         }
+        Request::GetSystemHistory { range } => {
+            let now = crate::store::db::now_ms();
+            let points = super::history::query_system(&agent.db(), range, now);
+            match points {
+                Ok(p) => Response::SystemHistory(p),
+                Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
+            }
+        }
         Request::GetRecent => {
             let mut samples = agent.sampler.window(0, u64::MAX);
             for s in &mut samples {
@@ -167,6 +175,7 @@ fn describe(req: &Request) -> String {
         Request::Hello { .. } => "Hello".into(),
         Request::Status { .. } => "Status".into(),
         Request::GetHistory { .. } => "GetHistory".into(),
+        Request::GetSystemHistory { .. } => "GetSystemHistory".into(),
         Request::GetRecent => "GetRecent".into(),
         Request::ListProcesses => "ListProcesses".into(),
         Request::KillProcess { pid } => format!("KillProcess {pid}"),

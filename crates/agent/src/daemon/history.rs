@@ -2,7 +2,7 @@
 //! [`MAX_POINTS`] points so any range is light to send and draw.
 
 use anyhow::Result;
-use pocketgpu_proto::msg::control::{MetricMinute, Range};
+use pocketgpu_proto::msg::control::{MetricMinute, Range, SystemMinute};
 use rusqlite::{Connection, params};
 
 pub const MAX_POINTS: i64 = 240;
@@ -40,6 +40,34 @@ pub fn query(db: &Connection, range: Range, gpu: u32, now_ms: i64) -> Result<Vec
             util_max: r.get::<_, Option<i64>>(3)?.unwrap_or(0) as u8,
             vram_max_mb: r.get::<_, Option<i64>>(4)?.unwrap_or(0) as u64,
             temp_max_c: r.get::<_, Option<i64>>(5)?.unwrap_or(0) as u8,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Machine-wide CPU/RAM/disk points over `range` ending at `now_ms`, oldest first.
+pub fn query_system(db: &Connection, range: Range, now_ms: i64) -> Result<Vec<SystemMinute>> {
+    let span = span_ms(range);
+    let bucket = (span / MAX_POINTS).max(MINUTE) / MINUTE * MINUTE;
+    let mut stmt = db.prepare(
+        "SELECT (at / ?1) * ?1 AS t, min(cpu_min), avg(cpu_avg), max(cpu_max),
+                min(ram_min), avg(ram_avg), max(ram_max),
+                min(disk_min), avg(disk_avg), max(disk_max)
+         FROM metrics_system_1m WHERE at >= ?2
+         GROUP BY t ORDER BY t",
+    )?;
+    let rows = stmt.query_map(params![bucket, now_ms - span], |r| {
+        Ok(SystemMinute {
+            at_ms: r.get::<_, i64>(0)? as u64,
+            cpu_min: r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u8,
+            cpu_avg: r.get::<_, Option<f64>>(2)?.unwrap_or(0.0).round() as u8,
+            cpu_max: r.get::<_, Option<i64>>(3)?.unwrap_or(0) as u8,
+            ram_min: r.get::<_, Option<i64>>(4)?.unwrap_or(0) as u8,
+            ram_avg: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0).round() as u8,
+            ram_max: r.get::<_, Option<i64>>(6)?.unwrap_or(0) as u8,
+            disk_min: r.get::<_, Option<i64>>(7)?.unwrap_or(0) as u8,
+            disk_avg: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0).round() as u8,
+            disk_max: r.get::<_, Option<i64>>(9)?.unwrap_or(0) as u8,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

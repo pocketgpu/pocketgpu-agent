@@ -83,6 +83,17 @@ const MIGRATIONS: &[M<'static>] = &[
     );
     ",
     ),
+    // Board 22: CPU, RAM and disk history, machine-wide (no `gpu` column).
+    M::up(
+        "
+    CREATE TABLE metrics_system_1m (
+        at       INTEGER PRIMARY KEY,
+        cpu_min  INTEGER, cpu_avg  INTEGER, cpu_max  INTEGER,
+        ram_min  INTEGER, ram_avg  INTEGER, ram_max  INTEGER,
+        disk_min INTEGER, disk_avg INTEGER, disk_max INTEGER
+    );
+    ",
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {

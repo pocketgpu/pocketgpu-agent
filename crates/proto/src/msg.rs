@@ -62,6 +62,22 @@ pub mod control {
         pub temp_max_c: u8,
     }
 
+    /// One minute of the whole machine: CPU, RAM and its main disk, each 0-100 (board 22's
+    /// CPU/RAM/disk history, for machines without a GPU and alongside one that has).
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct SystemMinute {
+        pub at_ms: u64,
+        pub cpu_min: u8,
+        pub cpu_avg: u8,
+        pub cpu_max: u8,
+        pub ram_min: u8,
+        pub ram_avg: u8,
+        pub ram_max: u8,
+        pub disk_min: u8,
+        pub disk_avg: u8,
+        pub disk_max: u8,
+    }
+
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct Proc {
         pub pid: u32,
@@ -137,6 +153,11 @@ pub mod control {
         GetHistory {
             range: Range,
             gpu: u32,
+        },
+        /// CPU, RAM and disk history (board 22): agents before it answer with an error, and
+        /// the phone shows no range beyond the live 10 minutes, as before.
+        GetSystemHistory {
+            range: Range,
         },
         ListProcesses,
         KillProcess {
@@ -279,6 +300,7 @@ pub mod control {
         Ok,
         MachineInfo(MachineInfo),
         History(Vec<MetricMinute>),
+        SystemHistory(Vec<SystemMinute>),
         Processes(Vec<Proc>),
         Actions(Vec<Action>),
         Action(Action),
@@ -365,6 +387,7 @@ pub mod control {
                 Self::Hello { .. }
                 | Self::Status { .. }
                 | Self::GetHistory { .. }
+                | Self::GetSystemHistory { .. }
                 | Self::GetRecent
                 | Self::ListActions
                 | Self::ListRuns { .. }

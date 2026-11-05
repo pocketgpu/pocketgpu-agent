@@ -93,11 +93,18 @@ impl Sampler {
             let sample = tokio::task::spawn_blocking(move || me.take(ollama_up)).await;
             let Ok(sample) = sample else { continue };
             if sample.at_ms >= minute_start + 60_000 {
-                let rows = summarize(&self.window(minute_start, minute_start + 60_000));
-                if let Ok(db) = db.lock()
-                    && let Err(e) = write_minute(&db, minute_start as i64, &rows)
-                {
-                    tracing::warn!("could not save history: {e}");
+                let window = self.window(minute_start, minute_start + 60_000);
+                let rows = summarize(&window);
+                let system = summarize_system(&window);
+                if let Ok(db) = db.lock() {
+                    if let Err(e) = write_minute(&db, minute_start as i64, &rows) {
+                        tracing::warn!("could not save history: {e}");
+                    }
+                    if let Some(system) = system
+                        && let Err(e) = write_system_minute(&db, minute_start as i64, &system)
+                    {
+                        tracing::warn!("could not save system history: {e}");
+                    }
                 }
                 minute_start = sample.at_ms / 60_000 * 60_000;
             }
@@ -172,6 +179,98 @@ fn write_minute(db: &Connection, at_ms: i64, rows: &[MinuteRow]) -> rusqlite::Re
     Ok(())
 }
 
+/// Min, average and max of CPU, RAM and the main disk, each 0-100.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SystemMinuteRow {
+    pub cpu_min: u8,
+    pub cpu_avg: u8,
+    pub cpu_max: u8,
+    pub ram_min: u8,
+    pub ram_avg: u8,
+    pub ram_max: u8,
+    pub disk_min: u8,
+    pub disk_avg: u8,
+    pub disk_max: u8,
+}
+
+/// The disk to watch: the root mount, or else the largest (board 22's "Disk" tile; the same
+/// choice `mainDisk` makes on the phone, so the live tile and this history agree).
+fn main_disk_pct(sample: &Sample) -> Option<f32> {
+    let d = sample.disks.iter().find(|d| d.mount == "/").or_else(|| {
+        sample
+            .disks
+            .iter()
+            .max_by(|a, b| a.total_gb.total_cmp(&b.total_gb))
+    })?;
+    (d.total_gb > 0.0).then(|| (d.used_gb / d.total_gb * 100.0).clamp(0.0, 100.0))
+}
+
+pub fn summarize_system(samples: &[Sample]) -> Option<SystemMinuteRow> {
+    if samples.is_empty() {
+        return None;
+    }
+    let cpu: Vec<f32> = samples.iter().map(|s| s.cpu_pct).collect();
+    let ram: Vec<f32> = samples
+        .iter()
+        .map(|s| {
+            if s.ram_total_mb > 0 {
+                (s.ram_used_mb as f32 / s.ram_total_mb as f32 * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let disk: Vec<f32> = samples.iter().filter_map(main_disk_pct).collect();
+    let agg = |v: &[f32]| -> (u8, u8, u8) {
+        if v.is_empty() {
+            return (0, 0, 0);
+        }
+        let min = v.iter().cloned().fold(f32::MAX, f32::min) as u8;
+        let max = v.iter().cloned().fold(f32::MIN, f32::max) as u8;
+        let avg = (v.iter().sum::<f32>() / v.len() as f32) as u8;
+        (min, avg, max)
+    };
+    let (cpu_min, cpu_avg, cpu_max) = agg(&cpu);
+    let (ram_min, ram_avg, ram_max) = agg(&ram);
+    let (disk_min, disk_avg, disk_max) = agg(&disk);
+    Some(SystemMinuteRow {
+        cpu_min,
+        cpu_avg,
+        cpu_max,
+        ram_min,
+        ram_avg,
+        ram_max,
+        disk_min,
+        disk_avg,
+        disk_max,
+    })
+}
+
+fn write_system_minute(db: &Connection, at_ms: i64, row: &SystemMinuteRow) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT OR REPLACE INTO metrics_system_1m
+            (at, cpu_min, cpu_avg, cpu_max, ram_min, ram_avg, ram_max, disk_min, disk_avg, disk_max)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            at_ms,
+            row.cpu_min,
+            row.cpu_avg,
+            row.cpu_max,
+            row.ram_min,
+            row.ram_avg,
+            row.ram_max,
+            row.disk_min,
+            row.disk_avg,
+            row.disk_max
+        ],
+    )?;
+    db.execute(
+        "DELETE FROM metrics_system_1m WHERE at < ?1",
+        [at_ms - KEEP_DAYS * 24 * 3600 * 1000],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +289,64 @@ mod tests {
             .query_row("SELECT count(*) FROM metrics_1m", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 2);
+    }
+
+    fn sample_with(cpu_pct: f32, ram_pct: f32, disk_pct: f32) -> Sample {
+        Sample {
+            at_ms: now_ms() as u64,
+            gpus: vec![],
+            cpu_pct,
+            ram_used_mb: (ram_pct * 10.0) as u64,
+            ram_total_mb: 1000,
+            disks: vec![pocketgpu_proto::DiskSample {
+                mount: "/".into(),
+                used_gb: disk_pct,
+                total_gb: 100.0,
+            }],
+            ollama_up: None,
+        }
+    }
+
+    #[test]
+    fn summarizes_cpu_ram_and_the_root_disk() {
+        let samples = vec![
+            sample_with(10.0, 20.0, 30.0),
+            sample_with(50.0, 60.0, 70.0),
+            sample_with(30.0, 40.0, 50.0),
+        ];
+        let row = summarize_system(&samples).unwrap();
+        assert_eq!((row.cpu_min, row.cpu_avg, row.cpu_max), (10, 30, 50));
+        assert_eq!((row.ram_min, row.ram_avg, row.ram_max), (20, 40, 60));
+        assert_eq!((row.disk_min, row.disk_avg, row.disk_max), (30, 50, 70));
+        let db = crate::store::db::open_in_memory().unwrap();
+        write_system_minute(&db, now_ms(), &row).unwrap();
+        let n: i64 = db
+            .query_row("SELECT count(*) FROM metrics_system_1m", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn no_samples_is_no_row() {
+        assert!(summarize_system(&[]).is_none());
+    }
+
+    #[test]
+    fn picks_the_largest_disk_without_a_root_mount() {
+        let mut s = sample_with(0.0, 0.0, 0.0);
+        s.disks = vec![
+            pocketgpu_proto::DiskSample {
+                mount: "D:\\".into(),
+                used_gb: 10.0,
+                total_gb: 50.0,
+            },
+            pocketgpu_proto::DiskSample {
+                mount: "C:\\".into(),
+                used_gb: 80.0,
+                total_gb: 100.0,
+            },
+        ];
+        let row = summarize_system(&[s]).unwrap();
+        assert_eq!(row.disk_avg, 80);
     }
 }
