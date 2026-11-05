@@ -28,8 +28,11 @@ pub fn run(action: PowerKind) -> Result<(), String> {
 #[cfg(windows)]
 fn command(action: PowerKind) -> (&'static str, &'static [&'static str]) {
     match action {
-        PowerKind::Restart => ("shutdown", &["/r", "/t", "0"]),
-        PowerKind::ShutDown => ("shutdown", &["/s", "/t", "0"]),
+        // `/f` forces running apps to close instead of waiting on them (or an unsaved-work
+        // dialog) forever: without it, `shutdown.exe` still exits 0 having only scheduled the
+        // restart, so a blocked one looks to the agent like it ran.
+        PowerKind::Restart => ("shutdown", &["/r", "/f", "/t", "0"]),
+        PowerKind::ShutDown => ("shutdown", &["/s", "/f", "/t", "0"]),
         // Hibernates instead when hibernation is on: Windows decides.
         PowerKind::Sleep => ("rundll32.exe", &["powrprof.dll,SetSuspendState", "0,1,0"]),
     }
