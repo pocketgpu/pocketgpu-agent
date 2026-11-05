@@ -16,8 +16,12 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 /// The per-user login entry: no service, so the agent and its terminal run as the user.
+/// Named apart from the desktop app's own "PocketGPU" entry (This PC's "start at login" and
+/// the installer both use that name via tauri-plugin-autostart / NSIS): the app's `ensure_agent`
+/// re-asserts this one on nearly every start, and the same name would make it and the app's
+/// entry overwrite each other at every login instead of both starting.
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "PocketGPU";
+const RUN_VALUE: &str = "PocketGPU Agent";
 
 /// A System32 tool by its full path: a bare name would also be looked up next to the agent's
 /// own exe and on PATH.
