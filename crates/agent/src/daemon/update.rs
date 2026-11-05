@@ -28,7 +28,7 @@ static LATEST: Mutex<Option<(Instant, String)>> = Mutex::new(None);
 static BUSY: AtomicBool = AtomicBool::new(false);
 
 pub async fn check() -> Response {
-    let latest = latest_tag().await.ok();
+    let latest = latest_tag().await.inspect_err(|e| tracing::warn!("update check: {e:#}")).ok();
     Response::Update(UpdateCheck {
         current: CURRENT.into(),
         available: latest
