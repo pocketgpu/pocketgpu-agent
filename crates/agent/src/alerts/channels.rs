@@ -21,7 +21,7 @@ pub const MAX: usize = 10;
 pub struct Alert {
     pub title: String,
     pub body: String,
-    /// `job_end`, `gpu_temp`, `disk_full`, `ollama_down` or `test`.
+    /// `job_end`, `gpu_temp`, `disk_full`, `ollama_down`, `idle_gpu` or `test`.
     pub kind: &'static str,
     pub machine: String,
     /// The job, for job alerts.

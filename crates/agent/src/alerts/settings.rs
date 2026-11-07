@@ -2,7 +2,7 @@
 //! `[alerts]` in `config.toml`.
 
 use anyhow::{Result, bail};
-use pocketgpu_proto::msg::control::{AlertKind, AlertRule};
+use pocketgpu_proto::msg::control::{AlertKind, AlertRule, IdleAlert};
 
 use crate::daemon::state::Agent;
 use crate::store::config::AlertConfig;
@@ -10,6 +10,48 @@ use crate::store::config::AlertConfig;
 pub const DEFAULT_GPU_TEMP_C: f32 = 85.0;
 pub const DEFAULT_DISK_PCT: f32 = 90.0;
 pub const DEFAULT_OFFLINE_MIN: f32 = 5.0;
+pub const DEFAULT_IDLE_MIN: u32 = 30;
+/// The idle alert's range in minutes, and the highest hourly price (US cents) it takes.
+pub const IDLE_MIN: (u32, u32) = (10, 24 * 60);
+pub const MAX_CENTS_PER_HOUR: u32 = 100_000;
+
+/// The idle GPU alert as phones see it (F38).
+pub fn idle(cfg: &AlertConfig) -> IdleAlert {
+    IdleAlert {
+        enabled: cfg.idle_gpu_min.is_some(),
+        minutes: cfg.idle_gpu_min.unwrap_or(DEFAULT_IDLE_MIN),
+        cents_per_hour: cfg.cents_per_hour,
+    }
+}
+
+/// Applies a phone's idle alert to the config; refused when out of range.
+pub fn apply_idle(cfg: &AlertConfig, a: &IdleAlert) -> Result<AlertConfig> {
+    let (lo, hi) = IDLE_MIN;
+    if !(lo..=hi).contains(&a.minutes) {
+        bail!("the idle time must be between {lo} and {hi} minutes");
+    }
+    if a.cents_per_hour.is_some_and(|c| c > MAX_CENTS_PER_HOUR) {
+        bail!(
+            "the hourly price must be at most ${}",
+            MAX_CENTS_PER_HOUR / 100
+        );
+    }
+    let mut next = cfg.clone();
+    next.idle_gpu_min = a.enabled.then_some(a.minutes);
+    next.cents_per_hour = a.cents_per_hour.filter(|&c| c > 0);
+    Ok(next)
+}
+
+/// Changes the running agent's idle alert and saves `config.toml`.
+pub fn set_idle(agent: &Agent, a: &IdleAlert) -> Result<IdleAlert> {
+    let mut cfg = agent.config.write().expect("config lock poisoned");
+    let alerts = apply_idle(&cfg.alerts, a)?;
+    let mut next = cfg.clone();
+    next.alerts = alerts;
+    next.save(&agent.paths.config_file())?;
+    *cfg = next;
+    Ok(idle(&cfg.alerts))
+}
 
 pub fn rules(cfg: &AlertConfig) -> Vec<AlertRule> {
     vec![
@@ -141,6 +183,76 @@ mod tests {
                 ..next
             },
             cfg
+        );
+    }
+
+    #[test]
+    fn idle_alert_is_off_by_default_and_checked() {
+        let cfg = AlertConfig::default();
+        assert_eq!(
+            idle(&cfg),
+            IdleAlert {
+                enabled: false,
+                minutes: DEFAULT_IDLE_MIN,
+                cents_per_hour: None
+            }
+        );
+        let on = IdleAlert {
+            enabled: true,
+            minutes: 45,
+            cents_per_hour: Some(190),
+        };
+        let next = apply_idle(&cfg, &on).unwrap();
+        assert_eq!(next.idle_gpu_min, Some(45));
+        assert_eq!(idle(&next), on);
+        let off = apply_idle(
+            &next,
+            &IdleAlert {
+                enabled: false,
+                ..on.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(off.idle_gpu_min, None);
+        // A zero price means none; out-of-range values change nothing.
+        let free = apply_idle(
+            &cfg,
+            &IdleAlert {
+                cents_per_hour: Some(0),
+                ..on.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(free.cents_per_hour, None);
+        assert!(
+            apply_idle(
+                &cfg,
+                &IdleAlert {
+                    minutes: 5,
+                    ..on.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            apply_idle(
+                &cfg,
+                &IdleAlert {
+                    minutes: 2000,
+                    ..on.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            apply_idle(
+                &cfg,
+                &IdleAlert {
+                    cents_per_hour: Some(MAX_CENTS_PER_HOUR + 1),
+                    ..on
+                }
+            )
+            .is_err()
         );
     }
 

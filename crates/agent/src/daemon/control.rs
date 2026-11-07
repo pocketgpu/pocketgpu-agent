@@ -63,6 +63,23 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
             }))
         }
         Request::GetAlertSettings => Response::AlertSettings(crate::alerts::settings::get(agent)),
+        Request::GetIdleAlert => {
+            let cfg = agent.config.read().expect("config lock poisoned");
+            Response::IdleAlert(crate::alerts::settings::idle(&cfg.alerts))
+        }
+        Request::SetIdleAlert(idle) => match crate::alerts::settings::set_idle(agent, &idle) {
+            Ok(idle) => {
+                let _ = crate::audit::record(
+                    &agent.db(),
+                    &peer.key.to_string(),
+                    crate::audit::Event::AlertSettings,
+                    "idle GPU alert",
+                    "ok",
+                );
+                Response::IdleAlert(idle)
+            }
+            Err(e) => Response::Error(Error::new(ErrorCode::Invalid, e.to_string())),
+        },
         Request::SetAlertSettings { rules } => match crate::alerts::settings::set(agent, &rules) {
             Ok(rules) => {
                 let _ = crate::audit::record(
@@ -186,6 +203,8 @@ fn describe(req: &Request) -> String {
         Request::DeleteAction { id } => format!("DeleteAction {id}"),
         Request::GetAlertSettings => "GetAlertSettings".into(),
         Request::SetAlertSettings { .. } => "SetAlertSettings".into(),
+        Request::GetIdleAlert => "GetIdleAlert".into(),
+        Request::SetIdleAlert(_) => "SetIdleAlert".into(),
         Request::SetPushTicket { .. } => "SetPushTicket".into(),
         Request::Unpair => "Unpair".into(),
         Request::ListRuns { .. } => "ListRuns".into(),

@@ -1,5 +1,6 @@
 //! Rule alerts (T071, Pro): GPU temperature above a limit for a minute, a disk above a
-//! limit, and Ollama down. Each rule fires at most once every 15 minutes per target.
+//! limit, Ollama down, and every GPU idle for a while (F38, `idle.rs`). Each rule fires at
+//! most once every 15 minutes per target; the idle alert once per idle stretch.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use pocketgpu_proto::push::{AlertKind, AlertRequest};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::client;
+use super::idle::Idle;
 use crate::daemon::state::Agent;
 use crate::store::config::AlertConfig;
 use crate::store::devices;
@@ -35,6 +37,7 @@ pub struct Rules {
     hot_since: HashMap<u32, u64>,
     ollama_seen_up: bool,
     ollama_down_since: Option<u64>,
+    idle: Idle,
 }
 
 impl Rules {
@@ -119,7 +122,17 @@ impl Rules {
             }
             _ => {}
         }
+
+        out.extend(self.idle.observe(s, cfg, named));
         out
+    }
+
+    /// An alert that wasn't sent (alerts held, or the same one went out just before) may
+    /// fire again. The other rules fire on every sample anyway; the idle one needs this.
+    pub fn unsent(&mut self, fired: &Fired) {
+        if fired.kind == AlertKind::IdleGpu {
+            self.idle.unsent();
+        }
     }
 }
 
@@ -165,10 +178,12 @@ pub async fn run(agent: Arc<Agent>) {
         for fired in rules.observe(&sample, &cfg, &agent.name(), generic) {
             // Held alerts aren't claimed, so a problem that outlasts the pause still alerts.
             if super::paused_until(&agent).is_some() {
+                rules.unsent(&fired);
                 continue;
             }
             let now = crate::store::db::now_ms();
             if !claim(&agent.db(), fired.kind, &fired.target, now).unwrap_or(false) {
+                rules.unsent(&fired);
                 continue;
             }
             let channel_alert = super::channels::Alert {
@@ -215,6 +230,7 @@ fn kind_name(kind: AlertKind) -> &'static str {
         AlertKind::OllamaDown => "ollama_down",
         AlertKind::DiskFull => "disk_full",
         AlertKind::NewDevice => "new_device",
+        AlertKind::IdleGpu => "idle_gpu",
     }
 }
 

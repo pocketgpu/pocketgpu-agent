@@ -4,12 +4,20 @@
 //! phone's push ticket as `Unpair`.
 
 use pocketgpu_proto::msg::control::{
-    AlertKind, AlertRule, NewAction, PowerKind, Range, Request, Response,
+    AlertKind, AlertRule, IdleAlert, NewAction, PowerKind, Range, Request, Response,
 };
 use pocketgpu_proto::{Error, ErrorCode};
 
 fn tag<T: serde::Serialize>(v: &T) -> u8 {
     postcard::to_allocvec(v).unwrap()[0]
+}
+
+fn idle() -> IdleAlert {
+    IdleAlert {
+        enabled: true,
+        minutes: 30,
+        cents_per_hour: Some(190),
+    }
 }
 
 #[test]
@@ -74,6 +82,8 @@ fn requests_keep_their_numbers() {
             22,
         ),
         (Request::GetSystemHistory { range: Range::H1 }, 23),
+        (Request::GetIdleAlert, 24),
+        (Request::SetIdleAlert(idle()), 25),
     ];
     for (req, n) in cases {
         assert_eq!(tag(&req), n, "{req:?} moved");
@@ -112,6 +122,7 @@ fn responses_keep_their_numbers() {
         (Response::Revoked { device: "d".into() }, 16),
         (Response::PowerScheduled { at_ms: 0 }, 18),
         (Response::SystemHistory(vec![]), 19),
+        (Response::IdleAlert(idle()), 20),
     ];
     for (res, n) in cases {
         assert_eq!(tag(&res), n, "{res:?} moved");

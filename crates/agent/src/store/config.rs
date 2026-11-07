@@ -40,6 +40,10 @@ pub struct AlertConfig {
     pub offline_after_min: f32,
     /// Push text without job and machine names.
     pub generic_text: bool,
+    /// Idle GPU alert (F38): minutes every GPU stays under 5% load; off when unset.
+    pub idle_gpu_min: Option<u32>,
+    /// What the machine costs an hour, in US cents, for the idle alert's text.
+    pub cents_per_hour: Option<u32>,
 }
 
 impl Default for Config {
@@ -69,6 +73,8 @@ impl Default for AlertConfig {
             ollama_down: false,
             offline_after_min: 5.0,
             generic_text: false,
+            idle_gpu_min: None,
+            cents_per_hour: None,
         }
     }
 }

@@ -137,6 +137,18 @@ pub mod control {
         GenericText,
     }
 
+    /// The idle GPU alert (F38, Pro): every GPU on the machine under 5% load for `minutes`.
+    /// Its own request, not an `AlertKind`: a phone from before it can't read an unknown
+    /// kind, and would lose the whole alert list.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct IdleAlert {
+        pub enabled: bool,
+        /// 10 to 1440.
+        pub minutes: u32,
+        /// What the machine costs an hour, in US cents, shown in the alert ("$1.90/h").
+        pub cents_per_hour: Option<u32>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct AlertRule {
         pub kind: AlertKind,
@@ -228,6 +240,11 @@ pub mod control {
         GetSystemHistory {
             range: Range,
         },
+        /// The idle GPU alert (F38). Agents before it answer with an error, and the phone
+        /// leaves the row out.
+        GetIdleAlert,
+        /// Changes it (Control); replies `IdleAlert`.
+        SetIdleAlert(IdleAlert),
     }
 
     /// F37: what a phone may ask the machine to do with its power.
@@ -336,6 +353,7 @@ pub mod control {
             at_ms: i64,
         },
         SystemHistory(Vec<SystemMinute>),
+        IdleAlert(IdleAlert),
     }
 
     /// The answer to `CheckUpdate`.
@@ -397,6 +415,7 @@ pub mod control {
                 | Self::ListRuns { .. }
                 | Self::ListGames
                 | Self::GetAlertSettings
+                | Self::GetIdleAlert
                 | Self::SetPushTicket { .. }
                 | Self::CheckUpdate
                 | Self::GetPower
@@ -406,7 +425,8 @@ pub mod control {
                 | Self::ListDevices
                 | Self::PowerAction { .. }
                 | Self::RunAction { .. }
-                | Self::SetAlertSettings { .. } => Permission::Control,
+                | Self::SetAlertSettings { .. }
+                | Self::SetIdleAlert(_) => Permission::Control,
                 // Replacing the agent's own program is as much as terminal access.
                 Self::CreateAction(_)
                 | Self::EditAction { .. }

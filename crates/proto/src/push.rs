@@ -40,6 +40,8 @@ pub enum AlertKind {
     DiskFull,
     /// A new device paired with the machine (F35): free, it's about safety.
     NewDevice,
+    /// Every GPU on the machine idle for a while (F38, Pro).
+    IdleGpu,
 }
 
 impl AlertKind {
