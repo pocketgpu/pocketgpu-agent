@@ -59,6 +59,14 @@ pub fn restart_after_stop() -> Result<()> {
     crate::winsys::spawn_detached(&installed_exe()?, &["restart-agent"])
 }
 
+/// After `pgpu update`: the same detached helper, then the agent is asked to stop. Run from a
+/// phone's terminal, this command ends with the agent (the terminal closes with it), and the
+/// helper still starts it again.
+pub fn restart_detached() -> Result<()> {
+    restart_after_stop()?;
+    request_stop()
+}
+
 /// `pocketgpu restart-agent`: waits up to 30 seconds for the running agent to stop, then
 /// starts it in the background.
 pub fn start_when_stopped() -> Result<()> {
@@ -68,13 +76,12 @@ pub fn start_when_stopped() -> Result<()> {
     start(&installed_exe()?)
 }
 
-/// The binary to start. After `pgpu update` this process runs from `pocketgpu.old.exe`.
+/// The binary to start. After `pgpu update` this process runs from an old binary
+/// (`pocketgpu.old.exe` or `pocketgpu.old-….exe`).
 fn installed_exe() -> Result<std::path::PathBuf> {
     let exe = std::env::current_exe().context("could not find the pocketgpu binary")?;
     match exe.file_name().and_then(|n| n.to_str()) {
-        Some(n) if n.eq_ignore_ascii_case("pocketgpu.old.exe") => {
-            Ok(exe.with_file_name("pocketgpu.exe"))
-        }
+        Some(n) if crate::cli::update::is_old_binary(n) => Ok(exe.with_file_name("pocketgpu.exe")),
         _ => Ok(exe),
     }
 }
@@ -96,6 +103,16 @@ pub fn start(exe: &std::path::Path) -> Result<()> {
 }
 
 fn stop() -> Result<()> {
+    request_stop()?;
+    if wait_for(|| !running(), Duration::from_secs(15)) {
+        Ok(())
+    } else {
+        bail!("the agent is still running after 15 seconds")
+    }
+}
+
+/// Asks the agent to stop, without waiting for it.
+fn request_stop() -> Result<()> {
     let paths = Paths::discover()?;
     // The command line runs on tokio's multi-threaded runtime.
     let reply = tokio::task::block_in_place(|| {
@@ -105,11 +122,7 @@ fn stop() -> Result<()> {
     if !matches!(reply, Response::Ok) {
         bail!("the agent did not stop: {reply:?}");
     }
-    if wait_for(|| !running(), Duration::from_secs(15)) {
-        Ok(())
-    } else {
-        bail!("the agent is still running after 15 seconds")
-    }
+    Ok(())
 }
 
 /// Whether an agent serves the local pipe. A busy pipe has an agent behind it too.

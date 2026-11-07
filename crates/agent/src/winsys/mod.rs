@@ -22,6 +22,9 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 /// entry overwrite each other at every login instead of both starting.
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "PocketGPU Agent";
+/// What agents before 1.2.26 named it: the same as the app's, so it counts only when its
+/// command starts the agent.
+const LEGACY_RUN_VALUE: &str = "PocketGPU";
 
 /// A System32 tool by its full path: a bare name would also be looked up next to the agent's
 /// own exe and on PATH.
@@ -194,6 +197,49 @@ pub fn default_shell() -> String {
     }
 }
 
+fn has_run_value(name: &str) -> bool {
+    quiet("reg")
+        .args(["query", RUN_KEY, "/v", name])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The command of a value under the Run key. Only for names without spaces: `reg_value`
+/// reads the name as the line's first word.
+fn run_value(name: &str) -> Option<String> {
+    let out = quiet("reg")
+        .args(["query", RUN_KEY, "/v", name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    crate::desktop_app::reg_value(&String::from_utf8_lossy(&out.stdout), name)
+}
+
+/// An entry from before 1.2.26 that starts the agent.
+fn legacy_agent_entry() -> bool {
+    run_value(LEGACY_RUN_VALUE).is_some_and(|c| crate::cli::service::is_agent_login_command(&c))
+}
+
+fn delete_run_value(name: &str) {
+    let _ = quiet("reg")
+        .args(["delete", RUN_KEY, "/v", name, "/f"])
+        .output();
+}
+
+/// Moves an agent entry from before 1.2.26 to the agent's own name, so `pgpu update` and
+/// updates from a phone see it and restart the agent. Run when the agent starts.
+pub fn migrate_login_entry() -> Result<()> {
+    if !legacy_agent_entry() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().context("could not find the pocketgpu binary")?;
+    let exe = match exe.file_name().and_then(|n| n.to_str()) {
+        Some(n) if crate::cli::update::is_old_binary(n) => exe.with_file_name("pocketgpu.exe"),
+        _ => exe,
+    };
+    install_login_entry(&exe)
+}
+
 /// Starts `pocketgpu agent` at login for this user.
 pub fn install_login_entry(exe: &std::path::Path) -> Result<()> {
     let value = format!("\"{}\" agent --background", exe.display());
@@ -209,21 +255,22 @@ pub fn install_login_entry(exe: &std::path::Path) -> Result<()> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
+    if legacy_agent_entry() {
+        delete_run_value(LEGACY_RUN_VALUE);
+    }
     Ok(())
 }
 
 pub fn remove_login_entry() -> Result<()> {
-    let _ = quiet("reg")
-        .args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"])
-        .output();
+    delete_run_value(RUN_VALUE);
+    if legacy_agent_entry() {
+        delete_run_value(LEGACY_RUN_VALUE);
+    }
     Ok(())
 }
 
 pub fn has_login_entry() -> bool {
-    quiet("reg")
-        .args(["query", RUN_KEY, "/v", RUN_VALUE])
-        .output()
-        .is_ok_and(|o| o.status.success())
+    has_run_value(RUN_VALUE) || legacy_agent_entry()
 }
 
 /// Starts `pocketgpu agent` with no console window, logging to `log`.

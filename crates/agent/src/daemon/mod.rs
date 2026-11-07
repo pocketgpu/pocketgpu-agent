@@ -53,6 +53,10 @@ pub async fn run(paths: Paths) -> Result<()> {
     // The PocketGPU app on this PC follows the agent's version (board 29).
     #[cfg(windows)]
     tokio::spawn(crate::desktop_app::keep_in_step(data_dir));
+    #[cfg(windows)]
+    if let Err(e) = crate::winsys::migrate_login_entry() {
+        tracing::warn!("could not rename the login entry: {e:#}");
+    }
     // The last run's crash, if it crashed and crash reports are on (board 25).
     tokio::spawn({
         let agent = agent.clone();

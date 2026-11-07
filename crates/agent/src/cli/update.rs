@@ -60,6 +60,12 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
 
     let exe = std::env::current_exe().context("could not find the running pocketgpu binary")?;
     install(&exe, &binary, &tag)?;
+    // On Windows a helper does the restart, so it completes even when this command runs in a
+    // phone's terminal, which closes with the agent.
+    #[cfg(windows)]
+    let restarted =
+        crate::cli::service::state() == "active" && crate::cli::service::restart_detached().is_ok();
+    #[cfg(not(windows))]
     let restarted =
         crate::cli::service::state() == "active" && crate::cli::service::restart().is_ok();
 
@@ -69,7 +75,9 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
         println!("{out}");
     } else {
         println!("Updated pgpu {CURRENT} to {tag} in {}", exe.display());
-        if restarted {
+        if restarted && cfg!(windows) {
+            println!("Restarting the agent; a phone's terminal reconnects in a few seconds.");
+        } else if restarted {
             println!("Restarted the agent service.");
         } else {
             println!("Restart the agent to use it: pgpu service install, or restart pgpu agent.");
@@ -184,12 +192,33 @@ fn replace(new: &Path, exe: &Path) -> Result<()> {
     std::fs::rename(new, exe).with_context(|| format!("could not replace {}", exe.display()))
 }
 
+/// `pocketgpu.old.exe`, and the names used when that one was still running.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn is_old_binary(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.starts_with("pocketgpu.old") && name.ends_with(".exe")
+}
+
 /// Windows can't replace a running program, but it can rename one: the old binary moves
-/// aside to `pocketgpu.old.exe` and is removed by the next update.
+/// aside to `pocketgpu.old.exe`, and the next update removes it. One that something still
+/// runs from (an agent that never restarted) can't be removed or replaced, so then the
+/// binary moves aside under a name of its own.
 #[cfg(windows)]
 fn replace(new: &Path, exe: &Path) -> Result<()> {
-    let old = exe.with_extension("old.exe");
-    let _ = std::fs::remove_file(&old);
+    let dir = exe
+        .parent()
+        .context("the running binary has no directory")?;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.file_name().to_str().is_some_and(is_old_binary) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let mut old = dir.join("pocketgpu.old.exe");
+    if old.exists() {
+        old = dir.join(format!("pocketgpu.old-{}.exe", crate::store::db::now_ms()));
+    }
     std::fs::rename(exe, &old)
         .with_context(|| format!("could not move {} aside", exe.display()))?;
     if let Err(e) = std::fs::rename(new, exe) {
@@ -197,6 +226,21 @@ fn replace(new: &Path, exe: &Path) -> Result<()> {
         return Err(e).with_context(|| format!("could not replace {}", exe.display()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod old_binary_tests {
+    use super::is_old_binary;
+
+    #[test]
+    fn knows_the_old_binaries() {
+        assert!(is_old_binary("pocketgpu.old.exe"));
+        assert!(is_old_binary("PocketGPU.OLD.exe"));
+        assert!(is_old_binary("pocketgpu.old-1762500000000.exe"));
+        assert!(!is_old_binary("pocketgpu.exe"));
+        assert!(!is_old_binary(".pocketgpu.new.exe"));
+        assert!(!is_old_binary("pocketgpu.stale.exe"));
+    }
 }
 
 #[cfg(all(test, unix))]
