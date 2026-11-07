@@ -21,6 +21,7 @@ pub mod pair {
 
     /// The agent's replies, in order: `Pending` once the proof checks out, then one of
     /// `Approved`, `Denied` or `Error`. A wrong, used or expired code gets `Error` at once.
+    /// New variants go at the end, as for `Request`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Response {
         /// Waiting for someone at the machine to approve. Phones that typed the code learn
@@ -144,6 +145,9 @@ pub mod control {
         pub threshold: Option<f32>,
     }
 
+    /// Postcard sends a variant as its position, so a phone and an agent of different
+    /// versions agree only while every variant keeps its place: add new ones at the end,
+    /// never in between (pinned by `tests/wire_order.rs`).
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Request {
         Hello {
@@ -153,11 +157,6 @@ pub mod control {
         GetHistory {
             range: Range,
             gpu: u32,
-        },
-        /// CPU, RAM and disk history (board 22): agents before it answer with an error, and
-        /// the phone shows no range beyond the live 10 minutes, as before.
-        GetSystemHistory {
-            range: Range,
         },
         ListProcesses,
         KillProcess {
@@ -223,6 +222,11 @@ pub mod control {
         /// and only when turned on there). Replies `PowerScheduled`.
         PowerAction {
             action: PowerKind,
+        },
+        /// CPU, RAM and disk history (board 22): agents before it answer with an error, and
+        /// the phone shows no range beyond the live 10 minutes, as before.
+        GetSystemHistory {
+            range: Range,
         },
     }
 
@@ -300,7 +304,6 @@ pub mod control {
         Ok,
         MachineInfo(MachineInfo),
         History(Vec<MetricMinute>),
-        SystemHistory(Vec<SystemMinute>),
         Processes(Vec<Proc>),
         Actions(Vec<Action>),
         Action(Action),
@@ -332,6 +335,7 @@ pub mod control {
         PowerScheduled {
             at_ms: i64,
         },
+        SystemHistory(Vec<SystemMinute>),
     }
 
     /// The answer to `CheckUpdate`.

@@ -166,7 +166,7 @@ main() {
     fi
     if [ -n "${root_container:-}" ]; then
         done_ "$os, $arch, root in a container"
-        printf '        %sAllowed in a container. A phone you give Shell access gets a root terminal here.%s\n' "$DIM" "$RESET"
+        printf '        %sAllowed in a container. The terminal stays off while the agent runs as root.%s\n' "$DIM" "$RESET"
     else
         done_ "$os, $arch"
     fi
