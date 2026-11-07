@@ -2,7 +2,9 @@
 # PocketGPU agent installer: curl -fsSL https://pocketgpu.app/install | sh
 #
 # Installs `pocketgpu` (alias `pgpu`) into ~/.local/bin, starts it at login (a systemd user
-# service on Linux, a launchd agent on Apple silicon Macs) and offers to pair a phone. No sudo. Settings, all optional:
+# service on Linux, a launchd agent on Apple silicon Macs) and offers to pair a phone. Needs no
+# sudo; it only offers `sudo loginctl enable-linger`, after asking. In a container with no
+# service manager (rented GPUs), it starts the agent in the background. Settings, all optional:
 #   PGPU_VERSION=v1.0.0       a release tag instead of the latest
 #   PGPU_INSTALL_DIR=/path    instead of ~/.local/bin
 #   PGPU_NO_SERVICE=1         install only; don't start the service
@@ -72,6 +74,60 @@ crash_reports() {
     fi
 }
 
+# The same test as the agent's (daemon/root.rs): Docker, Podman, Kubernetes, LXC. Rented GPUs
+# (RunPod, Vast.ai) are containers where everyone is root; the agent allows that with a warning.
+in_container() {
+    [ -f /.dockerenv ] || [ -f /run/.containerenv ] && return 0
+    grep -qE 'docker|kubepods|containerd|lxc' /proc/1/cgroup 2>/dev/null
+}
+
+agent_running() {
+    "$INSTALL_DIR/pocketgpu" status --json 2>/dev/null | grep -q '"paired"'
+}
+
+# No service manager (most containers): nothing would start the agent again, so it runs in the
+# background, detached from this terminal, until the machine or container stops.
+start_background() {
+    log="${XDG_DATA_HOME:-$HOME/.local/share}/pocketgpu/agent.log"
+    if agent_running; then
+        done_ "already running; stop it and start it again to use $version"
+        running=1
+        background=1
+        return
+    fi
+    mkdir -p "$(dirname "$log")"
+    set -- nohup "$INSTALL_DIR/pocketgpu" agent
+    has setsid && set -- setsid "$@"
+    NO_COLOR=1 "$@" >>"$log" 2>&1 </dev/null &
+    tries=0
+    while [ "$tries" -lt 15 ]; do
+        sleep 1
+        if agent_running; then
+            running=1
+            background=1
+            done_ "running in the background"
+            return
+        fi
+        tries=$((tries + 1))
+    done
+    fail "the agent did not start. Its log: $log"
+}
+
+# Without lingering, systemd stops the agent when the user's last session ends: on a server
+# reached over SSH, the phone shows the machine offline as soon as the user logs out.
+keep_running() {
+    user="${USER:-$(id -un)}"
+    printf '\n  %s! The agent stops when you log out, and your phone then shows this machine offline.%s\n' "$BOLD" "$RESET"
+    printf '  %sLingering keeps it running after you log out and starts it at boot.%s\n' "$DIM" "$RESET"
+    if has sudo && ask "Turn on lingering now? (runs: sudo loginctl enable-linger $user)"; then
+        if sudo loginctl enable-linger "$user"; then
+            printf '  %s%s%s it keeps running and starts at boot\n' "$GREEN" "$TICK" "$RESET"
+            return
+        fi
+    fi
+    printf '  To do it later, run: %ssudo loginctl enable-linger %s%s\n' "$BOLD" "$user" "$RESET"
+}
+
 # Whether the user's systemd can be reached. After `su - user` or `sudo -u user` the shell has
 # no session address; with lingering on, the manager still runs, so point at it.
 user_systemd() {
@@ -85,7 +141,10 @@ user_systemd() {
 main() {
     banner
     step "Checking this machine"
-    [ "$(id -u)" != "0" ] || fail "run this as your normal user, not root. PocketGPU never runs as root. On a server, make a user (adduser NAME), run: loginctl enable-linger NAME, then su - NAME and run this again. In a container, use the Docker image"
+    if [ "$(id -u)" = "0" ]; then
+        [ "$(uname -s)" = Linux ] && in_container || fail "run this as your normal user, not root. PocketGPU never runs as root. On a server, make a user (adduser NAME), run: loginctl enable-linger NAME, then su - NAME and run this again"
+        root_container=1
+    fi
     case "$(uname -s)" in
         Linux) system=linux ;;
         Darwin) system=macos ;;
@@ -105,7 +164,12 @@ main() {
         # shellcheck disable=SC1091
         os="$( (. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-Linux}") || printf 'Linux')"
     fi
-    done_ "$os, $arch"
+    if [ -n "${root_container:-}" ]; then
+        done_ "$os, $arch, root in a container"
+        printf '        %sAllowed in a container. A phone you give Shell access gets a root terminal here.%s\n' "$DIM" "$RESET"
+    else
+        done_ "$os, $arch"
+    fi
 
     if [ -n "${PGPU_DOWNLOAD_URL:-}" ]; then
         base="$PGPU_DOWNLOAD_URL"
@@ -161,12 +225,12 @@ main() {
         else
             done_ "running, and starts at boot"
         fi
-    elif [ -d /run/systemd/system ]; then
+    elif [ -d /run/systemd/system ] && [ -z "${root_container:-}" ]; then
         # systemd runs, but this shell has no login session (su or sudo from root).
         done_ "not started yet"
         no_manager=1
     else
-        done_ "no systemd here; run it with: pgpu agent"
+        start_background
     fi
 
     printf '\n  %s%s PocketGPU %s is installed.%s\n' "$GREEN" "$TICK" "$version" "$RESET"
@@ -190,7 +254,12 @@ main() {
         printf '  %sIt also makes the agent start at boot.%s\n' "$DIM" "$RESET"
     fi
     if [ -n "${linger:-}" ]; then
-        printf '  %sKeep it running after logout and start it at boot:%s sudo loginctl enable-linger %s\n' "$DIM" "$RESET" "${USER:-$(id -un)}"
+        keep_running
+    fi
+    if [ -n "${background:-}" ]; then
+        printf '\n  %sThe agent runs until this machine or container stops.%s Start it again with:\n' "$BOLD" "$RESET"
+        printf '    nohup %s/pgpu agent >> %s 2>&1 &\n' "$INSTALL_DIR" "$log"
+        printf '  %sOn RunPod or Vast.ai, add that line to the pod'"'"'s start script.%s\n' "$DIM" "$RESET"
     fi
 
     paired="$("$INSTALL_DIR/pocketgpu" status --json 2>/dev/null | sed -n 's/.*"paired": *\([0-9]*\).*/\1/p')"

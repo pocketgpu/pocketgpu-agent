@@ -1,6 +1,6 @@
 //! Started as Administrator, `pgpu` runs itself again without admin rights, in the same
-//! console: the Administrators group is off (deny-only), every privilege but bypass-traverse is
-//! gone and the integrity level is Medium, as in a normal window. The agent, its terminal and
+//! console: the Administrators group is off (deny-only), only the privileges a standard user
+//! has are left and the integrity level is Medium, as in a normal window. The agent, its terminal and
 //! its actions then never hold admin rights, also on PCs with UAC turned off, where every
 //! program starts elevated. The elevated process only waits and passes the exit code on.
 
@@ -12,12 +12,23 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::{
     ACL, ACL_REVISION, AddAccessAllowedAce, CreateRestrictedToken, CreateWellKnownSid,
-    DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation, InitializeAcl, PSID,
-    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
+    GetLengthSid, GetTokenInformation, InitializeAcl, LUID_AND_ATTRIBUTES, LookupPrivilegeNameW,
+    PSID, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
     TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_OWNER,
-    TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenIntegrityLevel, TokenOwner, TokenUser,
-    WELL_KNOWN_SID_TYPE, WinBuiltinAdministratorsSid, WinLocalSystemSid, WinMediumLabelSid,
+    TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenIntegrityLevel, TokenOwner,
+    TokenPrivileges, TokenUser, WELL_KNOWN_SID_TYPE, WinBuiltinAdministratorsSid,
+    WinLocalSystemSid, WinMediumLabelSid,
 };
+
+/// What a standard user's token holds; every other privilege is deleted. Shutdown is the one
+/// that matters: without it `shutdown.exe` and sleep fail with "Access is denied. (5)".
+const KEEP: [&str; 5] = [
+    "SeShutdownPrivilege",
+    "SeChangeNotifyPrivilege",
+    "SeUndockPrivilege",
+    "SeIncreaseWorkingSetPrivilege",
+    "SeTimeZonePrivilege",
+];
 use windows_sys::Win32::System::Console::{
     GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler,
 };
@@ -126,7 +137,49 @@ impl Sid {
     }
 }
 
-/// Our token without admin rights: Administrators deny-only, no privileges, Medium integrity,
+/// The privileges in `token` that a standard user doesn't have.
+///
+/// # Safety
+/// `token` must be a token handle opened with `TOKEN_QUERY`.
+unsafe fn admin_privileges(token: HANDLE) -> Result<Vec<LUID_AND_ATTRIBUTES>> {
+    let mut len = 0u32;
+    // SAFETY: a size query, then a read into a buffer of that size (u64s keep it aligned).
+    unsafe {
+        GetTokenInformation(token, TokenPrivileges, null_mut(), 0, &mut len);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        if GetTokenInformation(
+            token,
+            TokenPrivileges,
+            buf.as_mut_ptr().cast(),
+            len,
+            &mut len,
+        ) == 0
+        {
+            bail!("reading privileges: {}", std::io::Error::last_os_error());
+        }
+        let privs = buf.as_ptr().cast::<TOKEN_PRIVILEGES>();
+        let count = (*privs).PrivilegeCount as usize;
+        let all = std::slice::from_raw_parts(
+            (&raw const (*privs).Privileges).cast::<LUID_AND_ATTRIBUTES>(),
+            count,
+        );
+        Ok(all
+            .iter()
+            .filter(|p| {
+                let mut name = [0u16; 64];
+                let mut n = name.len() as u32;
+                let named = LookupPrivilegeNameW(null(), &p.Luid, name.as_mut_ptr(), &mut n) != 0;
+                !(named && KEEP.contains(&String::from_utf16_lossy(&name[..n as usize]).as_str()))
+            })
+            .map(|p| LUID_AND_ATTRIBUTES {
+                Luid: p.Luid,
+                Attributes: 0,
+            })
+            .collect())
+    }
+}
+
+/// Our token without admin rights: Administrators deny-only, a standard user's privileges, Medium integrity,
 /// and the user (not Administrators) as owner and in the default DACL, so the pipe and files
 /// the agent creates belong to the user.
 fn restricted_token() -> Result<Handle> {
@@ -164,14 +217,15 @@ fn restricted_token() -> Result<Handle> {
             Sid: admins.ptr(),
             Attributes: 0,
         };
+        let delete = admin_privileges(own.0)?;
         let mut restricted: HANDLE = null_mut();
         if CreateRestrictedToken(
             own.0,
-            DISABLE_MAX_PRIVILEGE,
+            0,
             1,
             &deny_admins,
-            0,
-            null(),
+            delete.len() as u32,
+            delete.as_ptr(),
             0,
             null(),
             &mut restricted,
