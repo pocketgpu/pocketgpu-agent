@@ -45,6 +45,8 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+# File hashes for transfers (F40).
+blake3.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -52,6 +54,8 @@ libc = "0.2"
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 # Remote-use notices on this computer's screen (F35).
 notify-rust = "4.18"
+# The desktop's clipboard (F41); text only, so no image support.
+arboard = { version = "3.7", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # IOKit and IOReport GPU stats on Apple silicon (F26).
@@ -64,6 +68,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    # The clipboard's secret mark (F41).
+    "Win32_System_DataExchange",
     "Win32_System_Environment",
     "Win32_System_Pipes",
     "Win32_System_SystemServices",

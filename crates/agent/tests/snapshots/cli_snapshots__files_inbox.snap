@@ -1,0 +1,7 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 251
+expression: "files::render_inbox(&on, false)"
+---
+Files sent here land in ~/PocketGPU/Inbox (3 files there).
+See them with: pgpu inbox · Move it with: pgpu files inbox <folder>

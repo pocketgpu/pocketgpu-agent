@@ -1,0 +1,8 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 317
+expression: "clip::render(&system)"
+---
+The clipboard is on. Phones that can run actions can put text here; phones with Full control can read it.
+Text goes to this computer's own clipboard.
+Turn off with: pgpu clip off

@@ -4,6 +4,7 @@
 use libfuzzer_sys::fuzz_target;
 use pocketgpu_proto::frame::decode;
 use pocketgpu_proto::msg::{control, jobs, metrics, pair};
+use pocketgpu_proto::{clip, files};
 
 fuzz_target!(|data: &[u8]| {
     // Decoding untrusted bytes must never panic, whatever the message type.
@@ -15,4 +16,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = decode::<metrics::Event>(data);
     let _ = decode::<jobs::Request>(data);
     let _ = decode::<jobs::Response>(data);
+    let _ = decode::<files::Request>(data);
+    let _ = decode::<files::Upload>(data);
+    let _ = decode::<clip::Request>(data);
 });

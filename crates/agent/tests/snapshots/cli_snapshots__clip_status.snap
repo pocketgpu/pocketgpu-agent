@@ -1,0 +1,9 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 310
+expression: "clip::render(&memory)"
+---
+The clipboard is on. Phones that can run actions can put text here; phones with Full control can read it.
+No screen here, so PocketGPU keeps its own clipboard in memory: read it with pgpu clip
+It holds text; it clears in 9 minutes.
+Turn off with: pgpu clip off

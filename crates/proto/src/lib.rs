@@ -1,8 +1,10 @@
 //! Protocol types and framing shared by the PocketGPU agent, command line and apps.
 
 pub mod alpn;
+pub mod clip;
 pub mod crash;
 pub mod docker;
+pub mod files;
 pub mod frame;
 pub mod local;
 pub mod msg;

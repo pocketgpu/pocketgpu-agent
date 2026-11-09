@@ -149,3 +149,212 @@ fn alert_kinds_keep_their_numbers() {
         assert_eq!(tag(&rule) as usize, n, "{kind:?} moved");
     }
 }
+
+#[test]
+fn local_requests_keep_their_numbers() {
+    use pocketgpu_proto::local::Request as L;
+    let cases = [
+        (L::Status, 0),
+        (L::GetDocker, 29),
+        (L::CancelPower, 40),
+        (L::GetFiles, 41),
+        (L::SetFiles { on: true }, 42),
+        (L::ShareFolder { path: "/a".into() }, 43),
+        (L::UnshareFolder { path: "/a".into() }, 44),
+        (L::SetInbox { path: "/a".into() }, 45),
+        (L::Inbox, 46),
+        (
+            L::Offer {
+                path: "/a".into(),
+                to: None,
+            },
+            47,
+        ),
+        (L::GetClip, 48),
+        (L::SetClip { on: true }, 49),
+        (L::ClipGet, 50),
+        (
+            L::ClipPut {
+                text: "t".into(),
+                once: false,
+            },
+            51,
+        ),
+        (L::ClipClear, 52),
+    ];
+    for (req, n) in cases {
+        assert_eq!(tag(&req), n, "{req:?} moved");
+    }
+}
+
+#[test]
+fn local_responses_keep_their_numbers() {
+    use pocketgpu_proto::clip::Place;
+    use pocketgpu_proto::local::{ClipStatus, FilesStatus, NoticeLevel, Response as L};
+    let cases = [
+        (L::Ok, 19),
+        (L::Notices(NoticeLevel::All), 26),
+        (
+            L::Files(FilesStatus {
+                enabled: true,
+                shared: vec![],
+                inbox: String::new(),
+                inbox_files: 0,
+                offers: 0,
+            }),
+            28,
+        ),
+        (L::InboxList(vec![]), 29),
+        (
+            L::Offered {
+                name: "a".into(),
+                size: 1,
+                to: vec![],
+                expires_ms: 0,
+                pushed: vec![],
+            },
+            30,
+        ),
+        (
+            L::Clip(ClipStatus {
+                enabled: true,
+                place: Place::Memory,
+                has_text: false,
+                clears_in_s: None,
+            }),
+            31,
+        ),
+        (L::ClipText(None), 32),
+    ];
+    for (res, n) in cases {
+        assert_eq!(tag(&res), n, "{res:?} moved");
+    }
+}
+
+#[test]
+fn files_messages_keep_their_numbers() {
+    use pocketgpu_proto::files::{Kind, Request, Response, Root, Upload};
+    let roots = [
+        Root::Shared(0),
+        Root::Inbox,
+        Root::JobLogs,
+        Root::Offers,
+        Root::Home,
+    ];
+    for (n, root) in roots.into_iter().enumerate() {
+        assert_eq!(tag(&root) as usize, n, "{root:?} moved");
+    }
+    let requests = [
+        (Request::Overview, 0),
+        (
+            Request::List {
+                root: Root::Inbox,
+                path: String::new(),
+                offset: 0,
+            },
+            1,
+        ),
+        (
+            Request::Get {
+                root: Root::Inbox,
+                path: "a".into(),
+                from: 0,
+            },
+            2,
+        ),
+        (
+            Request::Put {
+                name: "a".into(),
+                size: 1,
+                transfer: [0; 16],
+            },
+            3,
+        ),
+    ];
+    for (req, n) in requests {
+        assert_eq!(tag(&req), n, "{req:?} moved");
+    }
+    assert_eq!(tag(&Upload::Chunk(vec![1])), 0);
+    assert_eq!(tag(&Upload::Done { blake3: [0; 32] }), 1);
+    let responses = [
+        (
+            Response::Entries {
+                entries: vec![],
+                next: None,
+            },
+            1,
+        ),
+        (
+            Response::Head {
+                size: 0,
+                modified_ms: 0,
+            },
+            2,
+        ),
+        (Response::Chunk(vec![]), 3),
+        (Response::Done { blake3: [0; 32] }, 4),
+        (Response::Ready { have: 0 }, 5),
+        (
+            Response::Saved {
+                name: "a".into(),
+                blake3: [0; 32],
+            },
+            6,
+        ),
+        (Response::Error(Error::new(ErrorCode::Invalid, "x")), 7),
+    ];
+    for (res, n) in responses {
+        assert_eq!(tag(&res), n, "{res:?} moved");
+    }
+    assert_eq!(tag(&Kind::File), 0);
+    assert_eq!(tag(&Kind::Folder), 1);
+}
+
+#[test]
+fn clip_messages_keep_their_numbers() {
+    use pocketgpu_proto::clip::{Info, Place, Request, Response};
+    assert_eq!(tag(&Request::Info), 0);
+    let put = Request::Put {
+        text: "t".into(),
+        secret: false,
+        once: false,
+    };
+    assert_eq!(tag(&put), 1);
+    assert_eq!(tag(&Request::Get), 2);
+    assert_eq!(tag(&Place::System), 0);
+    assert_eq!(tag(&Place::Memory), 1);
+    let responses = [
+        (
+            Response::Info(Info {
+                enabled: true,
+                place: Place::System,
+                clears_after_s: None,
+            }),
+            0,
+        ),
+        (Response::Ok, 1),
+        (
+            Response::Text {
+                text: "t".into(),
+                age_ms: None,
+            },
+            2,
+        ),
+        (Response::Empty, 3),
+        (Response::Secret, 4),
+        (Response::Error(Error::new(ErrorCode::Invalid, "x")), 5),
+    ];
+    for (res, n) in responses {
+        assert_eq!(tag(&res), n, "{res:?} moved");
+    }
+}
+
+#[test]
+fn new_protocols_come_last() {
+    use pocketgpu_proto::alpn;
+    assert_eq!(alpn::ALL.len(), 10);
+    assert_eq!(alpn::ALL[8], alpn::FILES);
+    assert_eq!(alpn::ALL[9], alpn::CLIP);
+    assert_eq!(alpn::FILES, b"pgpu/files/1");
+    assert_eq!(alpn::CLIP, b"pgpu/clip/1");
+}

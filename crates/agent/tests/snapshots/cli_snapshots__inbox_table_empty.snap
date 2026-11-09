@@ -1,0 +1,6 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 274
+expression: "inbox::render(\"~/PocketGPU/Inbox\", &[], now)"
+---
+The Inbox is empty. Files sent from your phone land in ~/PocketGPU/Inbox.

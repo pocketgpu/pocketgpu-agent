@@ -1,0 +1,7 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 290
+expression: "send::render(&offered, 0)"
+---
+Offered adapter.safetensors (320 MB) to Pixel 8 and MacBook for 7 days.
+Pixel 8 got a push; all of them can save it from Files.

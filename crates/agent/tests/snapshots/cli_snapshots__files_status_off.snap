@@ -1,0 +1,9 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 250
+expression: "files::render(&off)"
+---
+Files are off: no device can see or send files here.
+No folders are shared. Share one with: pgpu files share <folder>
+Inbox: ~/PocketGPU/Inbox (0 files)
+Turn on with: pgpu files on

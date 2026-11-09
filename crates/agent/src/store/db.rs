@@ -94,6 +94,21 @@ const MIGRATIONS: &[M<'static>] = &[
     );
     ",
     ),
+    // F40: files offered with `pgpu send`, for every device with Control or one named.
+    M::up(
+        "
+    CREATE TABLE offers (
+        id          TEXT PRIMARY KEY,
+        path        TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        modified_ms INTEGER NOT NULL,
+        to_device   TEXT,
+        created_ms  INTEGER NOT NULL,
+        expires_ms  INTEGER NOT NULL
+    );
+    ",
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {

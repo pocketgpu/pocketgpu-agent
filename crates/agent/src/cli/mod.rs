@@ -9,10 +9,13 @@ use crate::store::paths::Paths;
 pub mod actions;
 pub mod alerts;
 pub mod audit;
+pub mod clip;
 pub mod crash;
 pub mod devices;
 pub mod docker;
 pub mod doctor;
+pub mod files;
+pub mod inbox;
 pub mod jobs;
 pub mod mcp;
 pub mod notices;
@@ -20,6 +23,7 @@ pub mod notify;
 mod pair;
 pub mod power;
 pub mod relay;
+pub mod send;
 pub mod service;
 pub mod shell;
 pub mod status;
@@ -127,6 +131,26 @@ pub enum Command {
     Docker {
         #[command(subcommand)]
         action: Option<docker::Action>,
+    },
+    /// Files for other devices: status (the default), on, off, share, unshare or inbox.
+    Files {
+        #[command(subcommand)]
+        action: Option<files::Action>,
+    },
+    /// List the files other devices sent here.
+    Inbox,
+    /// Offer a file to your phones for 7 days: they get a push and can save it.
+    Send {
+        /// The file to offer.
+        file: std::path::PathBuf,
+        /// Only this device: its name or the start of its key.
+        #[arg(long, value_name = "DEVICE")]
+        to: Option<String>,
+    },
+    /// The clipboard for other devices: get (the default), put, clear, status, on or off.
+    Clip {
+        #[command(subcommand)]
+        action: Option<clip::Action>,
     },
     /// Terminal access for Shell phones: status (the default), on or off.
     Shell {
@@ -252,6 +276,10 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Notices { action } => notices::run(&paths, cli.json, *action).await,
         Command::Power { action } => power::run(&paths, cli.json, *action).await,
         Command::Docker { action } => docker::run(&paths, cli.json, *action).await,
+        Command::Files { action } => files::run(&paths, cli.json, action.clone()).await,
+        Command::Inbox => inbox::run(&paths, cli.json).await,
+        Command::Send { file, to } => send::run(&paths, cli.json, file, to.clone()).await,
+        Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,
         Command::Relay { action } => relay::run(&paths, cli.json, action.clone()).await,

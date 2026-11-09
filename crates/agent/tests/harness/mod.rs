@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod push;
+
 use std::sync::Arc;
 
 use iroh::SecretKey;

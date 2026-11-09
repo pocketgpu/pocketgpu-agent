@@ -227,3 +227,93 @@ fn devices_table() {
     insta::assert_snapshot!(devices::render(&list, now));
     insta::assert_snapshot!("devices_table_empty", devices::render(&[], now));
 }
+
+#[test]
+fn files_status() {
+    use pocketgpu::cli::files;
+    use pocketgpu_proto::local::FilesStatus;
+    let on = FilesStatus {
+        enabled: true,
+        shared: vec!["~/ComfyUI/output".into(), "/mnt/data/runs".into()],
+        inbox: "~/PocketGPU/Inbox".into(),
+        inbox_files: 3,
+        offers: 1,
+    };
+    insta::assert_snapshot!(files::render(&on));
+    let off = FilesStatus {
+        enabled: false,
+        shared: vec![],
+        inbox_files: 0,
+        offers: 0,
+        ..on.clone()
+    };
+    insta::assert_snapshot!("files_status_off", files::render(&off));
+    insta::assert_snapshot!("files_inbox", files::render_inbox(&on, false));
+}
+
+#[test]
+fn inbox_table() {
+    use pocketgpu::cli::inbox;
+    use pocketgpu_proto::local::InboxFile;
+    let now = 10_000_000;
+    let files = vec![
+        InboxFile {
+            name: "IMG_2041.jpg".into(),
+            size: 2_400_000,
+            from: "Pixel 8".into(),
+            at_ms: now - 5 * 60_000,
+        },
+        InboxFile {
+            name: "dataset-2026-11-09-final-final-v2-cleaned.tar.gz".into(),
+            size: 3 << 30,
+            from: String::new(),
+            at_ms: now - 3 * 3_600_000,
+        },
+    ];
+    insta::assert_snapshot!(inbox::render("~/PocketGPU/Inbox", &files, now));
+    insta::assert_snapshot!(
+        "inbox_table_empty",
+        inbox::render("~/PocketGPU/Inbox", &[], now)
+    );
+}
+
+#[test]
+fn send_offered() {
+    use pocketgpu::cli::send::{self, Offered};
+    let offered = Offered {
+        name: "adapter.safetensors".into(),
+        size: 320 << 20,
+        to: vec!["Pixel 8".into(), "MacBook".into()],
+        expires_ms: 7 * 86_400_000,
+        pushed: vec!["Pixel 8".into()],
+    };
+    insta::assert_snapshot!(send::render(&offered, 0));
+    let nobody = Offered {
+        to: vec![],
+        pushed: vec![],
+        ..offered
+    };
+    insta::assert_snapshot!("send_offered_to_nobody", send::render(&nobody, 0));
+}
+
+#[test]
+fn clip_status() {
+    use pocketgpu::cli::clip;
+    use pocketgpu_proto::clip::Place;
+    use pocketgpu_proto::local::ClipStatus;
+    let memory = ClipStatus {
+        enabled: true,
+        place: Place::Memory,
+        has_text: true,
+        clears_in_s: Some(540),
+    };
+    insta::assert_snapshot!(clip::render(&memory));
+    let system = ClipStatus {
+        place: Place::System,
+        has_text: false,
+        clears_in_s: None,
+        ..memory.clone()
+    };
+    insta::assert_snapshot!("clip_status_system", clip::render(&system));
+    insta::assert_snapshot!("clip_put_once", clip::render_put(&memory, true));
+}

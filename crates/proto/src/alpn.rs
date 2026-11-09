@@ -19,5 +19,13 @@ pub const EVENTS: &[u8] = b"pgpu/events/1";
 /// Docker containers, one stream each (F28).
 pub const DOCKER: &[u8] = b"pgpu/docker/1";
 
+/// Files: shared folders, the Inbox and offers, one stream per request or transfer (F40).
+pub const FILES: &[u8] = b"pgpu/files/1";
+
+/// Text to and from the machine's clipboard, one stream per request (F41).
+pub const CLIP: &[u8] = b"pgpu/clip/1";
+
 /// Every protocol the agent serves.
-pub const ALL: [&[u8]; 8] = [PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER];
+pub const ALL: [&[u8]; 10] = [
+    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP,
+];

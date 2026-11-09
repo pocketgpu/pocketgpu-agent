@@ -135,16 +135,60 @@ pub enum Request {
     },
     /// Stops a restart, sleep or shutdown that is counting down. Replies `Ok`.
     CancelPower,
+    /// Files for other devices (F40). Replies `Files`.
+    GetFiles,
+    /// Turns files on or off; only here, never from a phone. Replies `Files`.
+    SetFiles {
+        on: bool,
+    },
+    /// Shares a folder (an absolute path) with devices that can run actions. Replies `Files`.
+    ShareFolder {
+        path: String,
+    },
+    /// Stops sharing a folder (as shared, or an absolute path). Replies `Files`.
+    UnshareFolder {
+        path: String,
+    },
+    /// Moves the Inbox to this folder (an absolute path). Replies `Files`.
+    SetInbox {
+        path: String,
+    },
+    /// Files in the Inbox, newest first. Replies `InboxList`.
+    Inbox,
+    /// `pgpu send`: offers a file (an absolute path) for 7 days to devices with Control, or
+    /// to the one named (a device's name or the start of its key). Replies `Offered`.
+    Offer {
+        path: String,
+        to: Option<String>,
+    },
+    /// The clipboard for other devices (F41). Replies `Clip`.
+    GetClip,
+    /// Turns the clipboard on or off; only here. Replies `Clip`.
+    SetClip {
+        on: bool,
+    },
+    /// What is on the clipboard (`pgpu clip`); reading it counts as a read for `once`.
+    /// Replies `ClipText`.
+    ClipGet,
+    /// Puts text there (`pgpu clip put`); `once` clears the in-memory clipboard after its
+    /// first read. Replies `Clip`.
+    ClipPut {
+        text: String,
+        once: bool,
+    },
+    /// Empties the clipboard. Replies `Clip`.
+    ClipClear,
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeLevel {
-    /// New devices, terminals, stopped processes, quick actions and containers.
+    /// New devices, terminals, files, the clipboard, stopped processes, quick actions and
+    /// containers.
     #[default]
     All,
-    /// Only new devices and terminals.
+    /// Only new devices, terminals, files sent here and clipboard reads.
     Fewer,
 }
 
@@ -310,6 +354,54 @@ pub enum Response {
     Connected(Vec<ConnectedDevice>),
     Notices(NoticeLevel),
     Power(crate::msg::control::PowerState),
+    Files(FilesStatus),
+    InboxList(Vec<InboxFile>),
+    /// The file is offered; `to` names the devices that may save it, `pushed` those of
+    /// them that get a push (the others have no push ticket here).
+    Offered {
+        name: String,
+        size: u64,
+        to: Vec<String>,
+        expires_ms: i64,
+        pushed: Vec<String>,
+    },
+    Clip(ClipStatus),
+    /// `None` when the clipboard is empty or holds no text.
+    ClipText(Option<String>),
+}
+
+/// Files for other devices (F40), as `pgpu files` shows them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesStatus {
+    pub enabled: bool,
+    /// Shared folders, as people know them (`~/ComfyUI/output`).
+    pub shared: Vec<String>,
+    pub inbox: String,
+    pub inbox_files: u32,
+    /// Offers that haven't expired.
+    pub offers: u32,
+}
+
+/// A file another device sent here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxFile {
+    pub name: String,
+    pub size: u64,
+    /// The device's name, or empty when the agent no longer knows it.
+    pub from: String,
+    /// When it arrived, in Unix milliseconds.
+    pub at_ms: i64,
+}
+
+/// The clipboard for other devices (F41), as `pgpu clip status` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipStatus {
+    pub enabled: bool,
+    pub place: crate::clip::Place,
+    /// There is text to read.
+    pub has_text: bool,
+    /// When the in-memory clipboard forgets its text.
+    pub clears_in_s: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

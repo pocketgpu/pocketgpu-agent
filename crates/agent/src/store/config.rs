@@ -1,6 +1,6 @@
 //! `config.toml`: settings the user changes with `pgpu` commands or by hand.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,14 @@ pub struct Config {
     pub notices: pocketgpu_proto::local::NoticeLevel,
     /// Restart, sleep and shut down from phones (F37). Off until `pgpu power on` here.
     pub power: bool,
+    /// Files for other devices (F40). Off until `pgpu files on` here.
+    pub files: bool,
+    /// Folders shared with `pgpu files share`, canonical paths.
+    pub files_shared: Vec<PathBuf>,
+    /// The Inbox set with `pgpu files inbox`; the default place when unset.
+    pub files_inbox: Option<PathBuf>,
+    /// The clipboard for other devices (F41). Off until `pgpu clip on` here.
+    pub clipboard: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +68,10 @@ impl Default for Config {
             notify: Vec::new(),
             notices: pocketgpu_proto::local::NoticeLevel::All,
             power: false,
+            files: false,
+            files_shared: Vec::new(),
+            files_inbox: None,
+            clipboard: false,
         }
     }
 }
@@ -107,6 +119,23 @@ mod tests {
         let mut cfg = Config::load(&path).unwrap();
         assert_eq!(cfg, Config::default());
         cfg.name = Some("rig-1".into());
+        cfg.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), cfg);
+    }
+
+    #[test]
+    fn files_and_clipboard_are_off_in_an_older_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "name = \"rig-1\"\nshell = true\n").unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert!(cfg.shell && !cfg.files && !cfg.clipboard);
+        assert!(cfg.files_shared.is_empty() && cfg.files_inbox.is_none());
+
+        let mut cfg = cfg;
+        cfg.files = true;
+        cfg.files_shared = vec![dir.path().join("out")];
+        cfg.files_inbox = Some(dir.path().join("in"));
         cfg.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), cfg);
     }

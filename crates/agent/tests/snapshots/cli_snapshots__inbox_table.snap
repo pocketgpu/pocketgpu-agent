@@ -1,0 +1,9 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 273
+expression: "inbox::render(\"~/PocketGPU/Inbox\", &files, now)"
+---
+In ~/PocketGPU/Inbox:
+NAME                                          SIZE  FROM             ARRIVED
+IMG_2041.jpg                                2.3 MB  Pixel 8          5m ago
+dataset-2026-11-09-final-final-v2-cleane    3.0 GB  -                3h ago

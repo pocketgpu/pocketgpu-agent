@@ -12,9 +12,10 @@ use crate::store::paths::Paths;
 pub enum Action {
     /// Show the level (the default).
     Status,
-    /// New devices, terminals, stopped processes, quick actions and containers.
+    /// New devices, terminals, files, the clipboard, stopped processes, quick actions and
+    /// containers.
     All,
-    /// Only new devices and terminals.
+    /// Only new devices, terminals, files sent here and clipboard reads.
     Fewer,
     /// Not possible: says why.
     Off,
@@ -45,11 +46,12 @@ pub async fn run(paths: &Paths, json: bool, action: Option<Action>) -> Result<()
 
 pub fn render(level: NoticeLevel) -> String {
     match level {
-        NoticeLevel::All => "Notices: all remote actions (new devices, terminals, stopped \
-                             processes, quick actions and containers).\n\
+        NoticeLevel::All => "Notices: all remote actions (new devices, terminals, files, the \
+                             clipboard, stopped processes, quick actions and containers).\n\
                              For fewer: pgpu notices fewer\n"
             .into(),
-        NoticeLevel::Fewer => "Notices: only new devices and terminals.\n\
+        NoticeLevel::Fewer => "Notices: only new devices, terminals, files sent here and \
+                               clipboard reads.\n\
                                For all remote actions: pgpu notices all\n"
             .into(),
     }

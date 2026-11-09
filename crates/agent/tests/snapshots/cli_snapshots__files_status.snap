@@ -1,0 +1,12 @@
+---
+source: crates/agent/tests/cli_snapshots.rs
+assertion_line: 242
+expression: "files::render(&on)"
+---
+Files are on. Phones that can run actions can use shared folders and the Inbox.
+Shared folders:
+  ~/ComfyUI/output
+  /mnt/data/runs
+Inbox: ~/PocketGPU/Inbox (3 files)
+Offered with pgpu send: 1 file
+Turn off with: pgpu files off

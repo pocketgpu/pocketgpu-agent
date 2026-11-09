@@ -3,8 +3,10 @@
 //! Used by the phone app's Rust core; `local` is the desktop tray app's way to the agent on
 //! the same machine (1.2).
 
+mod clip;
 mod docker;
 mod events;
+mod files;
 pub mod local;
 mod shell;
 mod tunnel;
@@ -19,8 +21,10 @@ use pocketgpu_proto::pairing::{PairCode, PairInput, proof};
 use pocketgpu_proto::{FrameError, Platform, Sample, alpn, read_frame, write_frame};
 use serde::{Serialize, de::DeserializeOwned};
 
+pub use clip::ClipContent;
 pub use docker::ContainerLog;
 pub use events::EventStream;
+pub use files::{Downloaded, Saved};
 pub use shell::{ShellEvent, ShellOpened, ShellReceiver, ShellSender};
 pub use tunnel::OllamaReply;
 
@@ -48,6 +52,16 @@ pub enum ClientError {
     /// The agent doesn't offer this protocol: it is older than the feature.
     #[error("this machine's agent is too old for this. Update it with `pgpu update`")]
     Unsupported,
+    /// A file on this device couldn't be read or written.
+    #[error("could not read or write the file: {0}")]
+    File(std::io::Error),
+    /// The file changed on the other side since the transfer started (it is smaller than
+    /// what was already copied, or not the size announced). Start again from the beginning.
+    #[error("the file changed while it was being copied; start again from the beginning")]
+    FileChanged,
+    /// The copy doesn't match the original's BLAKE3 hash.
+    #[error("the copy doesn't match the original (BLAKE3); start again from the beginning")]
+    HashMismatch,
 }
 
 /// Which relays the phone uses.
@@ -120,6 +134,8 @@ impl Client {
             metrics: Shared::default(),
             jobs: Shared::default(),
             docker: Shared::default(),
+            files: Shared::default(),
+            clip: Shared::default(),
         })
     }
 
@@ -217,6 +233,8 @@ pub struct Machine {
     metrics: Shared,
     jobs: Shared,
     docker: Shared,
+    files: Shared,
+    clip: Shared,
 }
 
 /// A connection for one more protocol, opened on first use and then shared by every
@@ -370,7 +388,13 @@ impl Machine {
 
     pub fn close(&self) {
         self.control.close(0u32.into(), b"bye");
-        for s in [&self.metrics, &self.jobs, &self.docker] {
+        for s in [
+            &self.metrics,
+            &self.jobs,
+            &self.docker,
+            &self.files,
+            &self.clip,
+        ] {
             s.close();
         }
     }

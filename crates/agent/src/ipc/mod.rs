@@ -67,6 +67,30 @@ where
                 }
                 continue;
             }
+            Request::GetFiles
+            | Request::SetFiles { .. }
+            | Request::ShareFolder { .. }
+            | Request::UnshareFolder { .. }
+            | Request::SetInbox { .. }
+            | Request::Inbox
+            | Request::Offer { .. } => {
+                let reply = crate::files::local_request(&agent, req).await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            Request::GetClip
+            | Request::SetClip { .. }
+            | Request::ClipGet
+            | Request::ClipPut { .. }
+            | Request::ClipClear => {
+                let reply = crate::clip::local_request(&agent, req).await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::Notify { title, body } => {
                 let reply = match crate::alerts::sender::send_note(&agent, &title, &body).await {
                     Ok((phones, channels, held)) => Response::Notified {
@@ -287,6 +311,20 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         Request::Notify { .. } => Response::Error("notes run on the stream handler".into()),
         Request::GetDocker | Request::SetDocker { .. } => {
             Response::Error("Docker requests run on the stream handler".into())
+        }
+        Request::GetFiles
+        | Request::SetFiles { .. }
+        | Request::ShareFolder { .. }
+        | Request::UnshareFolder { .. }
+        | Request::SetInbox { .. }
+        | Request::Inbox
+        | Request::Offer { .. }
+        | Request::GetClip
+        | Request::SetClip { .. }
+        | Request::ClipGet
+        | Request::ClipPut { .. }
+        | Request::ClipClear => {
+            Response::Error("files and clipboard requests run on the stream handler".into())
         }
     }
 }

@@ -76,7 +76,7 @@ pub fn render(entries: &[AuditEntry], now_ms: i64) -> String {
     out
 }
 
-fn ago(ms: i64) -> String {
+pub(crate) fn ago(ms: i64) -> String {
     let s = ms.max(0) / 1000;
     match s {
         0..60 => "just now".into(),

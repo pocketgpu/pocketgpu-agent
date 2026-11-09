@@ -76,6 +76,7 @@ pub async fn run(paths: Paths) -> Result<()> {
     let router = endpoint::serve(agent.clone(), endpoint);
     let vram = tokio::spawn(crate::jobs::track_vram(agent.clone()));
     let prune = tokio::spawn(crate::jobs::prune_hourly(agent.clone()));
+    let files = tokio::spawn(crate::files::tidy_hourly(agent.clone()));
     let alerts = tokio::spawn(crate::alerts::sender::run(agent.clone()));
     let heartbeat = tokio::spawn(crate::alerts::heartbeat::run(agent.clone()));
     let rules = tokio::spawn(crate::alerts::rules::run(agent.clone()));
@@ -108,6 +109,7 @@ pub async fn run(paths: Paths) -> Result<()> {
     sampler.abort();
     vram.abort();
     prune.abort();
+    files.abort();
     alerts.abort();
     heartbeat.abort();
     rules.abort();

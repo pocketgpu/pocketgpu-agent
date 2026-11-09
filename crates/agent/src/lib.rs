@@ -4,10 +4,12 @@ pub mod actions;
 pub mod alerts;
 pub mod audit;
 pub mod cli;
+pub mod clip;
 pub mod collect;
 pub mod daemon;
 pub mod desktop_app;
 pub mod docker;
+pub mod files;
 pub mod games;
 pub mod ipc;
 pub mod jobs;
@@ -28,6 +30,7 @@ pub mod winsys;
 pub const AGENT_ONLY_ENV: &[&str] = &[
     "PGPU_FAKE_GPU",
     "PGPU_FAKE_POWER",
+    "PGPU_CLIPBOARD",
     "PGPU_UNELEVATED",
     "RUST_LOG",
     "INVOCATION_ID",

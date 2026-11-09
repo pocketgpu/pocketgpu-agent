@@ -39,6 +39,26 @@ pub enum Event {
     Power,
     /// `pgpu power on` or `off`.
     PowerAccess,
+    /// A device saved a file from here (F40). The target is the root and the path, such as
+    /// `Inbox/photo.jpg` or `output/ComfyUI_00412_.png`. Written `started` as the bytes
+    /// start to go (that shows the notice), then set to `ok` when it all went, or to
+    /// `stopped at 1.9 GB of 2.0 GB` and why, however the transfer ended.
+    FileGet,
+    /// A device sent a file here. The target is the name it got in the Inbox; the result
+    /// `ok` when it was saved.
+    FilePut,
+    /// `pgpu files on`, `off`, `share`, `unshare` or `inbox`.
+    FilesAccess,
+    /// `pgpu send`: the target is the file, the result who it was offered to.
+    FileOffer,
+    /// A device put text on the clipboard (F41). The target is `system` or `memory`, never
+    /// the text.
+    ClipPut,
+    /// A device read the clipboard; the result `ok` when text was sent, else `empty` or
+    /// `secret`. Never the text.
+    ClipGet,
+    /// `pgpu clip on` or `off`.
+    ClipAccess,
 }
 
 impl Event {
@@ -66,6 +86,13 @@ impl Event {
             Self::Update => "update",
             Self::Power => "power",
             Self::PowerAccess => "power_access",
+            Self::FileGet => "file_get",
+            Self::FilePut => "file_put",
+            Self::FilesAccess => "files_access",
+            Self::FileOffer => "file_offer",
+            Self::ClipPut => "clip_put",
+            Self::ClipGet => "clip_get",
+            Self::ClipAccess => "clip_access",
         }
     }
 }
@@ -98,6 +125,31 @@ pub fn record(
         ],
     )?;
     crate::notices::observe(db, device, event, target, result);
+    Ok(())
+}
+
+/// The result of an entry written as a transfer starts (see [`Event::FileGet`]).
+pub const STARTED: &str = "started";
+
+/// Like [`record`], and returns the entry's id, so [`finish`] can say later how it ended.
+pub fn start(
+    db: &Connection,
+    device: &str,
+    event: Event,
+    target: &str,
+    result: &str,
+) -> Result<i64> {
+    record(db, device, event, target, result)?;
+    Ok(db.last_insert_rowid())
+}
+
+/// Sets the result of an entry written with [`start`]. Shows no notice: that went with
+/// the start.
+pub fn finish(db: &Connection, id: i64, result: &str) -> Result<()> {
+    db.execute(
+        "UPDATE audit SET result = ?1 WHERE audit_id = ?2",
+        params![clean(result), id],
+    )?;
     Ok(())
 }
 

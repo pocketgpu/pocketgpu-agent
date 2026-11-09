@@ -68,6 +68,89 @@ async fn messages_roundtrip() {
 }
 
 #[tokio::test]
+async fn files_and_clipboard_roundtrip() {
+    use pocketgpu_proto::files::{self, Entry, Folder, Kind, Offer, Overview, Root, Upload};
+    use pocketgpu_proto::{clip, local};
+    roundtrip(files::Request::Get {
+        root: Root::Shared(2),
+        path: "renders/cat.png".into(),
+        from: 4096,
+    })
+    .await;
+    roundtrip(files::Request::Put {
+        name: "dataset.zip".into(),
+        size: 3 << 30,
+        transfer: [9; 16],
+    })
+    .await;
+    roundtrip(files::Response::Overview(Overview {
+        enabled: true,
+        shared: vec![Folder {
+            name: "output".into(),
+            path: "~/ComfyUI/output".into(),
+            files: 214,
+        }],
+        inbox: "~/PocketGPU/Inbox".into(),
+        inbox_files: 3,
+        job_logs: 12,
+        offers: vec![Offer {
+            id: "k3f9".into(),
+            name: "adapter.safetensors".into(),
+            size: 320 << 20,
+            offered_ms: 1,
+            expires_ms: 2,
+        }],
+        home: false,
+        relay_limit: Some(files::RELAY_LIMIT),
+    }))
+    .await;
+    roundtrip(files::Response::Entries {
+        entries: vec![Entry {
+            name: "ComfyUI_00412_.png".into(),
+            kind: Kind::File,
+            size: 1_800_000,
+            modified_ms: 5,
+        }],
+        next: Some(files::PAGE),
+    })
+    .await;
+    roundtrip(files::Response::Saved {
+        name: "photo (2).jpg".into(),
+        blake3: [7; 32],
+    })
+    .await;
+    // Full chunks fit in a frame both ways.
+    roundtrip(files::Response::Chunk(vec![0xAB; files::CHUNK])).await;
+    roundtrip(Upload::Chunk(vec![0xCD; files::CHUNK])).await;
+    roundtrip(Upload::Done { blake3: [7; 32] }).await;
+
+    roundtrip(clip::Request::Put {
+        text: "hf_abc".into(),
+        secret: true,
+        once: true,
+    })
+    .await;
+    roundtrip(clip::Response::Text {
+        text: "tail".into(),
+        age_ms: Some(1500),
+    })
+    .await;
+    roundtrip(local::Request::Offer {
+        path: "/home/me/out/adapter.safetensors".into(),
+        to: Some("Pixel 8".into()),
+    })
+    .await;
+    roundtrip(local::Response::InboxList(vec![local::InboxFile {
+        name: "IMG_2041.jpg".into(),
+        size: 2_400_000,
+        from: "Pixel 8".into(),
+        at_ms: 3,
+    }]))
+    .await;
+    roundtrip(local::Response::ClipText(Some("hf_abc".into()))).await;
+}
+
+#[tokio::test]
 async fn oversize_frames_are_rejected() {
     let mut buf = Vec::new();
     buf.extend_from_slice(&((MAX_FRAME as u32) + 1).to_be_bytes());

@@ -1,11 +1,12 @@
 //! Remote-use notices (F35, board 30): whoever is at this computer sees when another device
 //! uses it. Every remote action already writes one audit entry, so `audit::record` hands each
 //! entry here ([`observe`]); this module picks the ones worth a notice, groups repeats to one
-//! a minute per device and kind, and shows them through the system's notifications
-//! ([`show`]). Entries from the command line (`local`) and from this computer's own app
+//! a minute per device and kind (files: one notice for a batch sent within seconds of each
+//! other), and shows them through the system's notifications ([`show`]). Entries from the command line (`local`) and from this computer's own app
 //! (`this_pc`) never show one.
 
 pub mod show;
+mod text;
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -18,8 +19,14 @@ use tokio::sync::mpsc;
 use crate::audit::Event;
 use crate::daemon::state::Agent;
 
+pub use text::{summary, text};
+
 /// Repeats of one kind from one device within this long become one summary.
 pub const GROUP_WINDOW: Duration = Duration::from_secs(60);
+
+/// File notices wait this long after the last file from a device (and at most
+/// [`GROUP_WINDOW`] after the first), so a batch is one notice: "Pixel 8 sent 3 files".
+pub const HOLD: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -32,12 +39,31 @@ pub enum Kind {
     Revoke,
     /// A restart, sleep or shutdown counting down (F37).
     Power,
+    /// A device sent a file here (F40).
+    FileSent,
+    /// A device saved a file from here.
+    FileTaken,
+    /// A device read the clipboard (F41).
+    ClipRead,
 }
 
 impl Kind {
-    /// Shown at every level, at once, never grouped.
+    /// Shown at every level, the fewer one too.
     pub fn always(self) -> bool {
+        matches!(
+            self,
+            Self::Pair | Self::Terminal | Self::Power | Self::FileSent | Self::ClipRead
+        )
+    }
+
+    /// Shown at once each time, never grouped with others.
+    pub fn alone(self) -> bool {
         matches!(self, Self::Pair | Self::Terminal | Self::Power)
+    }
+
+    /// Held back for [`HOLD`] and shown once for the whole batch, not first one by one.
+    pub fn held(self) -> bool {
+        matches!(self, Self::FileSent | Self::FileTaken)
     }
 }
 
@@ -151,21 +177,12 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         Event::Container if result == "ok" => Kind::Container,
         Event::Revoke if result == REVOKED_BY_DEVICE => Kind::Revoke,
         Event::Power if result == crate::power::COUNTING_DOWN => Kind::Power,
+        Event::FilePut if result == "ok" => Kind::FileSent,
+        Event::FileGet if result == crate::audit::STARTED || result == "ok" => Kind::FileTaken,
+        Event::ClipGet if result == "ok" => Kind::ClipRead,
         _ => return None,
     })
 }
-
-/// How to stop a power countdown from the notice: its button, or on macOS the command line.
-#[cfg(not(target_os = "macos"))]
-const CANCEL_HINT: &str = "To stop it, press Cancel.";
-#[cfg(target_os = "macos")]
-const CANCEL_HINT: &str = "To stop it, run: pgpu power cancel";
-
-/// How to revoke from the notice: its button, or on macOS (no buttons yet) the app.
-#[cfg(not(target_os = "macos"))]
-const REVOKE_HINT: &str = "Revoke it.";
-#[cfg(target_os = "macos")]
-const REVOKE_HINT: &str = "Revoke it in PocketGPU, or with: pgpu devices revoke";
 
 /// Changes the level, here at the computer only (no phone request exists for it).
 pub fn set_level(agent: &Agent, level: NoticeLevel) -> anyhow::Result<NoticeLevel> {
@@ -193,157 +210,80 @@ pub fn shown_at(level: NoticeLevel, kind: Kind) -> bool {
     kind.always() || level == NoticeLevel::All
 }
 
-/// The notice for one action.
-pub fn text(r: &Remote, machine: &str) -> Notice {
-    let who = &r.name;
-    let (title, body) = match r.kind {
-        Kind::Pair => {
-            let perm = r.result.split(' ').next().unwrap_or("view");
-            let what = match perm {
-                "shell" => "Shell access, so it can open a terminal here",
-                "control" => "Control access, so it can stop processes and run actions here",
-                _ => "View access, so it can see this computer's stats",
-            };
-            (
-                format!("New device paired: {who}"),
-                format!("With {what}. Not you? {REVOKE_HINT}"),
-            )
-        }
-        Kind::Terminal => (
-            format!("{who} opened a terminal"),
-            format!("On {machine}, as you. PocketGPU's tray shows who is connected."),
-        ),
-        Kind::Kill => (
-            format!("{who} stopped {}", r.target),
-            format!("On {machine}."),
-        ),
-        Kind::JobStop => (
-            format!("{who} stopped {}", r.target),
-            format!("On {machine}."),
-        ),
-        Kind::Action => (
-            format!("{who} ran {}", action_name(&r.target)),
-            format!("On {machine} · {}.", r.result),
-        ),
-        Kind::Container => (
-            format!("{who} {}", container_text(&r.target)),
-            format!("On {machine}."),
-        ),
-        Kind::Revoke => (
-            format!("{who} revoked {}", r.target),
-            format!("{} can no longer connect to {machine}.", r.target),
-        ),
-        Kind::Power => {
-            let what = match r.target.as_str() {
-                "restart" => "restarting this computer",
-                "sleep" => "putting this computer to sleep",
-                _ => "shutting down this computer",
-            };
-            (
-                format!("{who} is {what} in 30 seconds"),
-                format!("Save your work. {CANCEL_HINT}"),
-            )
-        }
-    };
-    Notice {
-        title,
-        body,
-        revoke: (r.kind == Kind::Pair).then(|| (r.device.clone(), r.name.clone())),
-        cancel_power: r.kind == Kind::Power,
+/// One open grouping window.
+#[derive(Debug, Clone)]
+pub struct Open {
+    opened: Instant,
+    last: Instant,
+    first: Remote,
+    count: u32,
+}
+
+impl Open {
+    fn over(&self, now: Instant) -> bool {
+        now.duration_since(self.opened) >= GROUP_WINDOW
+            || (self.first.kind.held() && now.duration_since(self.last) >= HOLD)
     }
 }
 
-/// Several actions of one kind from one device in a minute.
-pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
-    let who = &r.name;
-    let first = match r.kind {
-        Kind::Action => action_name(&r.target).to_string(),
-        Kind::Container => r
-            .target
-            .split_once(' ')
-            .map_or(r.target.clone(), |(_, id)| id.into()),
-        _ => r.target.clone(),
-    };
-    let (verb, noun) = match r.kind {
-        Kind::Kill => ("stopped", "processes"),
-        Kind::JobStop => ("stopped", "jobs"),
-        Kind::Action => ("ran", "quick actions"),
-        Kind::Container => ("changed", "containers"),
-        Kind::Revoke => ("revoked", "devices"),
-        Kind::Pair | Kind::Terminal | Kind::Power => ("used", "things"),
-    };
-    Notice {
-        title: format!("{who} {verb} {count} {noun}"),
-        body: format!(
-            "{first} and {} more on {machine}, in the last minute.",
-            count - 1
-        ),
-        revoke: None,
-        cancel_power: false,
-    }
-}
+/// Open grouping windows, per device and kind.
+pub type Windows = HashMap<(String, Kind), Open>;
 
-/// `#3 Restart vLLM` → `Restart vLLM`.
-fn action_name(target: &str) -> &str {
-    match target.split_once(' ') {
-        Some((id, name)) if id.starts_with('#') => name,
-        _ => target,
-    }
-}
-
-/// `restart 3f2a…` → `restarted container 3f2a…`.
-fn container_text(target: &str) -> String {
-    let (action, id) = target.split_once(' ').unwrap_or(("changed", target));
-    let short: String = id.chars().take(12).collect();
-    let verb = match action {
-        "start" => "started",
-        "stop" => "stopped",
-        "restart" => "restarted",
-        other => other,
-    };
-    format!("{verb} container {short}")
-}
-
-/// Open grouping windows: per device and kind, when it opened, the first action and how
-/// many so far.
-pub type Windows = HashMap<(String, Kind), (Instant, Remote, u32)>;
-
-/// What to do with one action, given the open windows: show it now, or count it.
+/// What to do with one action, given the open windows: show it now, or count it. Call
+/// [`flush`] first, so a window that is over gives its notice before a new one opens.
 pub fn group(windows: &mut Windows, r: Remote, now: Instant) -> Option<Remote> {
-    if r.kind.always() {
+    if r.kind.alone() {
         return Some(r);
     }
     let key = (r.device.clone(), r.kind);
     match windows.get_mut(&key) {
-        Some((opened, _, count)) if now.duration_since(*opened) < GROUP_WINDOW => {
-            *count += 1;
+        Some(open) if !open.over(now) => {
+            open.count += 1;
+            open.last = now;
             None
         }
         _ => {
-            windows.insert(key, (now, r.clone(), 1));
-            Some(r)
+            let held = r.kind.held();
+            let open = Open {
+                opened: now,
+                last: now,
+                first: r.clone(),
+                count: 1,
+            };
+            windows.insert(key, open);
+            (!held).then_some(r)
         }
     }
 }
 
-/// Windows that are over: those with repeats give a summary of all of them.
+/// Windows that are over: those with repeats give a summary of all of them (count over
+/// 1), a held one its only action (count 1).
 pub fn flush(windows: &mut Windows, now: Instant) -> Vec<(Remote, u32)> {
     let mut out = Vec::new();
-    windows.retain(|_, (opened, first, count)| {
-        if now.duration_since(*opened) < GROUP_WINDOW {
+    windows.retain(|_, open| {
+        if !open.over(now) {
             return true;
         }
-        if *count > 1 {
-            out.push((first.clone(), *count));
+        if open.count > 1 || open.first.kind.held() {
+            out.push((open.first.clone(), open.count));
         }
         false
     });
     out
 }
 
+/// The notice for what [`flush`] gave.
+fn flushed(first: &Remote, count: u32, machine: &str) -> Notice {
+    if count > 1 {
+        summary(first, count, machine)
+    } else {
+        text(first, machine)
+    }
+}
+
 async fn run(agent: Arc<Agent>, mut rx: mpsc::UnboundedReceiver<Msg>) {
     let mut windows = Windows::new();
-    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    let mut tick = tokio::time::interval(Duration::from_secs(2));
     loop {
         tokio::select! {
             got = rx.recv() => {
@@ -365,13 +305,17 @@ async fn run(agent: Arc<Agent>, mut rx: mpsc::UnboundedReceiver<Msg>) {
                 if !shown_at(level, r.kind) {
                     continue;
                 }
-                if let Some(r) = group(&mut windows, r, Instant::now()) {
+                let now = Instant::now();
+                for (first, count) in flush(&mut windows, now) {
+                    show::show(&agent, flushed(&first, count, &agent.name()));
+                }
+                if let Some(r) = group(&mut windows, r, now) {
                     show::show(&agent, text(&r, &agent.name()));
                 }
             }
             _ = tick.tick() => {
                 for (first, count) in flush(&mut windows, Instant::now()) {
-                    show::show(&agent, summary(&first, count, &agent.name()));
+                    show::show(&agent, flushed(&first, count, &agent.name()));
                 }
             }
         }
