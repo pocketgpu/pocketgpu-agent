@@ -38,6 +38,9 @@ pub enum Request {
     List,
     /// One connection to the app on this port. Replies `Opened`, then raw bytes.
     Open { port: u16 },
+    /// Where to start in the app: `/`, or Jupyter's `/?token=…` so nobody types the token.
+    /// Replies `Start`. Agents before it answer with an error: start at `/` then.
+    Start { port: u16 },
 }
 
 /// What kind of app it is, for its tile and how-to.
@@ -80,13 +83,17 @@ pub enum Response {
     /// The app answered; the stream is raw bytes from here on.
     Opened,
     Error(Error),
+    /// The path to open first, starting with `/`.
+    Start {
+        path: String,
+    },
 }
 
 impl Request {
     pub fn min_permission(&self) -> Permission {
         match self {
             Self::List => Permission::View,
-            Self::Open { .. } => Permission::Shell,
+            Self::Open { .. } | Self::Start { .. } => Permission::Shell,
         }
     }
 }

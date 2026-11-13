@@ -390,6 +390,7 @@ fn apps_messages_keep_their_numbers() {
     use pocketgpu_proto::apps::{App, Apps, Kind, Request, Response};
     assert_eq!(tag(&Request::List), 0);
     assert_eq!(tag(&Request::Open { port: 1 }), 1);
+    assert_eq!(tag(&Request::Start { port: 1 }), 2);
     let kinds = [
         Kind::Jupyter,
         Kind::TensorBoard,
@@ -421,4 +422,5 @@ fn apps_messages_keep_their_numbers() {
         tag(&Response::Error(Error::new(ErrorCode::Invalid, "x"))),
         2
     );
+    assert_eq!(tag(&Response::Start { path: "/".into() }), 3);
 }

@@ -6,6 +6,7 @@
 
 pub mod find;
 pub mod handler;
+pub mod jupyter;
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};

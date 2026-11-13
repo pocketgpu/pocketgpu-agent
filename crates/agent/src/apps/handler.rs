@@ -45,12 +45,22 @@ async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request, send: SendStream,
     let what = match req {
         Request::List => "Apps List",
         Request::Open { .. } => "Apps Open",
+        Request::Start { .. } => "Apps Start",
     };
     if let Err(e) = agent.require(peer, req.min_permission(), what) {
         return reply(send, Response::Error(e)).await;
     }
     match req {
         Request::List => reply(send, Response::Apps(super::list(agent).await)).await,
+        Request::Start { port } => {
+            let r = match super::check(agent, port) {
+                Ok(()) => Response::Start {
+                    path: super::jupyter::start_path(port).unwrap_or_else(|| "/".into()),
+                },
+                Err(e) => Response::Error(e),
+            };
+            reply(send, r).await
+        }
         Request::Open { port } => {
             if let Err(e) = super::check(agent, port) {
                 return reply(send, Response::Error(e)).await;

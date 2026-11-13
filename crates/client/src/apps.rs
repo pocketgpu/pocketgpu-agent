@@ -24,7 +24,22 @@ impl Machine {
         match request(&conn, &Request::List).await? {
             Response::Apps(a) => Ok(a),
             Response::Error(e) => Err(ClientError::Remote(e)),
-            Response::Opened => Err(ClientError::NoReply),
+            Response::Opened | Response::Start { .. } => Err(ClientError::NoReply),
+        }
+    }
+
+    /// Where to start in the app on `port`: `/`, or Jupyter's `/?token=…` (Shell). `/` from
+    /// agents before it.
+    pub async fn app_start(&self, port: u16) -> Result<String, ClientError> {
+        let conn = self.apps.get(self, alpn::APPS).await?;
+        match request(&conn, &Request::Start { port }).await {
+            Ok(Response::Start { path }) if path.starts_with('/') => Ok(path),
+            Ok(Response::Error(e)) if e.code != pocketgpu_proto::ErrorCode::Invalid => {
+                Err(ClientError::Remote(e))
+            }
+            // An agent before `Start` can't read the request.
+            Ok(_) | Err(ClientError::Frame(_)) => Ok("/".into()),
+            Err(e) => Err(e),
         }
     }
 

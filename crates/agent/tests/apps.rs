@@ -150,3 +150,33 @@ async fn a_browser_reaches_the_app_through_the_local_address() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(TcpStream::connect(local).await.is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn jupyter_opens_with_its_token_and_others_at_the_start() {
+    let runtime = tempfile::tempdir().unwrap();
+    // SAFETY: the only test here that reads Jupyter's folder; set before anything starts.
+    unsafe { std::env::set_var("JUPYTER_RUNTIME_DIR", runtime.path()) };
+    let h = Harness::start().await;
+    let jupyter = web_app().await;
+    let other = web_app().await;
+    add(&h, jupyter).await;
+    add(&h, other).await;
+    let server = format!(r#"{{"port": {jupyter}, "token": "f00d", "base_url": "/"}}"#);
+    std::fs::write(runtime.path().join("jpserver-42.json"), server).unwrap();
+
+    let shell = device(&h, Permission::Shell).await;
+    let view = device(&h, Permission::View).await;
+    // Off: refused like Open.
+    assert_eq!(
+        refusal(shell.app_start(jupyter).await).0,
+        ErrorCode::Forbidden
+    );
+    turn(&h, true).await;
+    assert_eq!(shell.app_start(jupyter).await.unwrap(), "/?token=f00d");
+    assert_eq!(shell.app_start(other).await.unwrap(), "/");
+    // The token goes only to a device that may open the app.
+    assert_eq!(
+        refusal(view.app_start(jupyter).await).0,
+        ErrorCode::Forbidden
+    );
+}
