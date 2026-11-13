@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod alerts;
+pub mod apps;
 pub mod audit;
 pub mod cli;
 pub mod clip;

@@ -25,7 +25,10 @@ pub const FILES: &[u8] = b"pgpu/files/1";
 /// Text to and from the machine's clipboard, one stream per request (F41).
 pub const CLIP: &[u8] = b"pgpu/clip/1";
 
+/// The machine's web apps and a way in to them, one stream per TCP connection (F42).
+pub const APPS: &[u8] = b"pgpu/apps/1";
+
 /// Every protocol the agent serves.
-pub const ALL: [&[u8]; 10] = [
-    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP,
+pub const ALL: [&[u8]; 11] = [
+    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP, APPS,
 ];

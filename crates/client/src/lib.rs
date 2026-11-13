@@ -3,6 +3,7 @@
 //! Used by the phone app's Rust core; `local` is the desktop tray app's way to the agent on
 //! the same machine (1.2).
 
+mod apps;
 mod clip;
 mod docker;
 mod events;
@@ -21,6 +22,7 @@ use pocketgpu_proto::pairing::{PairCode, PairInput, proof};
 use pocketgpu_proto::{FrameError, Platform, Sample, alpn, read_frame, write_frame};
 use serde::{Serialize, de::DeserializeOwned};
 
+pub use apps::Forward;
 pub use clip::ClipContent;
 pub use docker::ContainerLog;
 pub use events::EventStream;
@@ -136,6 +138,7 @@ impl Client {
             docker: Shared::default(),
             files: Shared::default(),
             clip: Shared::default(),
+            apps: Shared::default(),
         })
     }
 
@@ -235,6 +238,7 @@ pub struct Machine {
     docker: Shared,
     files: Shared,
     clip: Shared,
+    apps: Shared,
 }
 
 /// A connection for one more protocol, opened on first use and then shared by every
@@ -394,6 +398,7 @@ impl Machine {
             &self.docker,
             &self.files,
             &self.clip,
+            &self.apps,
         ] {
             s.close();
         }

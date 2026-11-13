@@ -59,6 +59,12 @@ pub enum Event {
     ClipGet,
     /// `pgpu clip on` or `off`.
     ClipAccess,
+    /// A device opened one of the machine's web apps (F42). The target is the app and its
+    /// port, such as `Jupyter Lab :8888`; written once per device and app every 10
+    /// minutes, not for each of the browser's connections.
+    AppOpen,
+    /// `pgpu apps on`, `off`, `add`, `remove` or one app turned off or on.
+    AppsAccess,
 }
 
 impl Event {
@@ -93,6 +99,8 @@ impl Event {
             Self::ClipPut => "clip_put",
             Self::ClipGet => "clip_get",
             Self::ClipAccess => "clip_access",
+            Self::AppOpen => "app_open",
+            Self::AppsAccess => "apps_access",
         }
     }
 }

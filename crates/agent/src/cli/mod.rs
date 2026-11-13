@@ -8,6 +8,7 @@ use crate::store::paths::Paths;
 
 pub mod actions;
 pub mod alerts;
+pub mod apps;
 pub mod audit;
 pub mod clip;
 pub mod crash;
@@ -147,6 +148,11 @@ pub enum Command {
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
     },
+    /// Web apps here (Jupyter, TensorBoard, ComfyUI) for your devices: status, on, off, add.
+    Apps {
+        #[command(subcommand)]
+        action: Option<apps::Action>,
+    },
     /// The clipboard for other devices: get (the default), put, clear, status, on or off.
     Clip {
         #[command(subcommand)]
@@ -279,6 +285,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Files { action } => files::run(&paths, cli.json, action.clone()).await,
         Command::Inbox => inbox::run(&paths, cli.json).await,
         Command::Send { file, to } => send::run(&paths, cli.json, file, to.clone()).await,
+        Command::Apps { action } => apps::run(&paths, cli.json, action.clone()).await,
         Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,

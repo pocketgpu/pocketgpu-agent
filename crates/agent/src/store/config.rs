@@ -36,6 +36,19 @@ pub struct Config {
     pub files_inbox: Option<PathBuf>,
     /// The clipboard for other devices (F41). Off until `pgpu clip on` here.
     pub clipboard: bool,
+    /// The machine's web apps for other devices (F42). Off until `pgpu apps on` here.
+    pub apps: bool,
+    /// Ports added with `pgpu apps add`, with the name given there.
+    pub apps_added: Vec<AddedApp>,
+    /// Ports turned off one by one: listed, but other devices can't open them.
+    pub apps_off: Vec<u16>,
+}
+
+/// A port added with `pgpu apps add`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddedApp {
+    pub port: u16,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,6 +85,9 @@ impl Default for Config {
             files_shared: Vec::new(),
             files_inbox: None,
             clipboard: false,
+            apps: false,
+            apps_added: Vec::new(),
+            apps_off: Vec::new(),
         }
     }
 }

@@ -178,6 +178,27 @@ pub enum Request {
     },
     /// Empties the clipboard. Replies `Clip`.
     ClipClear,
+    /// The web apps running here and whether other devices may open them (F42). Replies
+    /// `Apps`, with every app found even while apps are off.
+    GetApps,
+    /// Lets other devices open apps here, or not; only here. Replies `Apps`.
+    SetApps {
+        on: bool,
+    },
+    /// Looks for an app on this port too, with this name (`pgpu apps add`). Replies `Apps`.
+    AddApp {
+        port: u16,
+        name: Option<String>,
+    },
+    /// Stops looking on a port added with `AddApp`. Replies `Apps`.
+    RemoveApp {
+        port: u16,
+    },
+    /// Keeps other devices out of one app (`off`), or lets them in again. Replies `Apps`.
+    SetAppOff {
+        port: u16,
+        off: bool,
+    },
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -368,6 +389,7 @@ pub enum Response {
     Clip(ClipStatus),
     /// `None` when the clipboard is empty or holds no text.
     ClipText(Option<String>),
+    Apps(crate::apps::Apps),
 }
 
 /// Files for other devices (F40), as `pgpu files` shows them.

@@ -181,6 +181,23 @@ fn local_requests_keep_their_numbers() {
             51,
         ),
         (L::ClipClear, 52),
+        (L::GetApps, 53),
+        (L::SetApps { on: true }, 54),
+        (
+            L::AddApp {
+                port: 7000,
+                name: None,
+            },
+            55,
+        ),
+        (L::RemoveApp { port: 7000 }, 56),
+        (
+            L::SetAppOff {
+                port: 7000,
+                off: true,
+            },
+            57,
+        ),
     ];
     for (req, n) in cases {
         assert_eq!(tag(&req), n, "{req:?} moved");
@@ -225,6 +242,13 @@ fn local_responses_keep_their_numbers() {
             31,
         ),
         (L::ClipText(None), 32),
+        (
+            L::Apps(pocketgpu_proto::apps::Apps {
+                enabled: false,
+                apps: vec![],
+            }),
+            33,
+        ),
     ];
     for (res, n) in cases {
         assert_eq!(tag(&res), n, "{res:?} moved");
@@ -352,9 +376,49 @@ fn clip_messages_keep_their_numbers() {
 #[test]
 fn new_protocols_come_last() {
     use pocketgpu_proto::alpn;
-    assert_eq!(alpn::ALL.len(), 10);
+    assert_eq!(alpn::ALL.len(), 11);
     assert_eq!(alpn::ALL[8], alpn::FILES);
     assert_eq!(alpn::ALL[9], alpn::CLIP);
+    assert_eq!(alpn::ALL[10], alpn::APPS);
     assert_eq!(alpn::FILES, b"pgpu/files/1");
     assert_eq!(alpn::CLIP, b"pgpu/clip/1");
+    assert_eq!(alpn::APPS, b"pgpu/apps/1");
+}
+
+#[test]
+fn apps_messages_keep_their_numbers() {
+    use pocketgpu_proto::apps::{App, Apps, Kind, Request, Response};
+    assert_eq!(tag(&Request::List), 0);
+    assert_eq!(tag(&Request::Open { port: 1 }), 1);
+    let kinds = [
+        Kind::Jupyter,
+        Kind::TensorBoard,
+        Kind::ComfyUI,
+        Kind::Gradio,
+        Kind::OpenWebUI,
+        Kind::Streamlit,
+        Kind::Ollama,
+        Kind::LmStudio,
+        Kind::Other,
+    ];
+    for (n, k) in kinds.iter().enumerate() {
+        assert_eq!(tag(k), n as u8, "{k:?} moved");
+    }
+    let app = App {
+        port: 1,
+        name: "a".into(),
+        kind: Kind::Other,
+        added: false,
+        off: false,
+    };
+    let list = Response::Apps(Apps {
+        enabled: true,
+        apps: vec![app],
+    });
+    assert_eq!(tag(&list), 0);
+    assert_eq!(tag(&Response::Opened), 1);
+    assert_eq!(
+        tag(&Response::Error(Error::new(ErrorCode::Invalid, "x"))),
+        2
+    );
 }

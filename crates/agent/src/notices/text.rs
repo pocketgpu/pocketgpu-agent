@@ -77,6 +77,10 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             format!("{who} read the clipboard"),
             format!("On {machine}."),
         ),
+        Kind::AppOpen => (
+            format!("{who} opened {}", app_name(&r.target)),
+            format!("On {machine}. It can use the app as you do here."),
+        ),
     };
     Notice {
         title,
@@ -91,6 +95,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
     let who = &r.name;
     let first = match r.kind {
         Kind::Action => action_name(&r.target).to_string(),
+        Kind::AppOpen => app_name(&r.target).to_string(),
         Kind::Container => r
             .target
             .split_once(' ')
@@ -105,6 +110,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
         Kind::Revoke => ("revoked", "devices"),
         Kind::FileSent => ("sent", "files to this PC"),
         Kind::FileTaken => ("saved", "files from this PC"),
+        Kind::AppOpen => ("opened", "apps"),
         Kind::ClipRead => {
             return Notice {
                 title: format!("{who} read the clipboard {count} times"),
@@ -124,6 +130,11 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
         revoke: None,
         cancel_power: false,
     }
+}
+
+/// `Jupyter Lab :8888` → `Jupyter Lab`.
+fn app_name(target: &str) -> &str {
+    target.rsplit_once(" :").map_or(target, |(name, _)| name)
 }
 
 /// `#3 Restart vLLM` → `Restart vLLM`.

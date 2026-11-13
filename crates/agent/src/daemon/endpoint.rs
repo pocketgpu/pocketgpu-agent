@@ -117,7 +117,11 @@ pub fn serve(agent: Arc<Agent>, endpoint: Endpoint) -> Router {
             alpn::FILES,
             Paired::new(agent.clone(), crate::files::handler::Files),
         )
-        .accept(alpn::CLIP, Paired::new(agent, crate::clip::handler::Clip))
+        .accept(
+            alpn::CLIP,
+            Paired::new(agent.clone(), crate::clip::handler::Clip),
+        )
+        .accept(alpn::APPS, Paired::new(agent, crate::apps::handler::Apps))
         .spawn()
 }
 

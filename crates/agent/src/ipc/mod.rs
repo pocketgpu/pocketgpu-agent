@@ -91,6 +91,17 @@ where
                 }
                 continue;
             }
+            Request::GetApps
+            | Request::SetApps { .. }
+            | Request::AddApp { .. }
+            | Request::RemoveApp { .. }
+            | Request::SetAppOff { .. } => {
+                let reply = crate::apps::local_request(&agent, req).await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::Notify { title, body } => {
                 let reply = match crate::alerts::sender::send_note(&agent, &title, &body).await {
                     Ok((phones, channels, held)) => Response::Notified {
@@ -323,8 +334,13 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         | Request::SetClip { .. }
         | Request::ClipGet
         | Request::ClipPut { .. }
-        | Request::ClipClear => {
-            Response::Error("files and clipboard requests run on the stream handler".into())
+        | Request::ClipClear
+        | Request::GetApps
+        | Request::SetApps { .. }
+        | Request::AddApp { .. }
+        | Request::RemoveApp { .. }
+        | Request::SetAppOff { .. } => {
+            Response::Error("files, clipboard and apps requests run on the stream handler".into())
         }
     }
 }

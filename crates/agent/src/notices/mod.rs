@@ -45,6 +45,8 @@ pub enum Kind {
     FileTaken,
     /// A device read the clipboard (F41).
     ClipRead,
+    /// A device opened one of the machine's web apps (F42).
+    AppOpen,
 }
 
 impl Kind {
@@ -52,7 +54,12 @@ impl Kind {
     pub fn always(self) -> bool {
         matches!(
             self,
-            Self::Pair | Self::Terminal | Self::Power | Self::FileSent | Self::ClipRead
+            Self::Pair
+                | Self::Terminal
+                | Self::Power
+                | Self::FileSent
+                | Self::ClipRead
+                | Self::AppOpen
         )
     }
 
@@ -180,6 +187,7 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         Event::FilePut if result == "ok" => Kind::FileSent,
         Event::FileGet if result == crate::audit::STARTED || result == "ok" => Kind::FileTaken,
         Event::ClipGet if result == "ok" => Kind::ClipRead,
+        Event::AppOpen if result == "ok" => Kind::AppOpen,
         _ => return None,
     })
 }
