@@ -10,6 +10,7 @@ mod events;
 mod files;
 pub mod local;
 mod shell;
+pub mod sync;
 mod tunnel;
 
 use std::sync::Arc;
