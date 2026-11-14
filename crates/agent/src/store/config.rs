@@ -42,6 +42,9 @@ pub struct Config {
     pub apps_added: Vec<AddedApp>,
     /// Ports turned off one by one: listed, but other devices can't open them.
     pub apps_off: Vec<u16>,
+    /// A live picture of this screen for devices with Full control (F45). Off until
+    /// `pgpu screen on` here.
+    pub screen: bool,
 }
 
 /// A port added with `pgpu apps add`.
@@ -88,6 +91,7 @@ impl Default for Config {
             apps: false,
             apps_added: Vec::new(),
             apps_off: Vec::new(),
+            screen: false,
         }
     }
 }

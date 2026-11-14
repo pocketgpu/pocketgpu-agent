@@ -68,6 +68,11 @@ pub enum Event {
     /// A device made an invite (F44; the target is the level, the result how long) or gave
     /// a guest more time (the target is the guest).
     Invite,
+    /// A device started looking at the screen (F45); the target is the display. Written once
+    /// per device every 10 minutes, not for each look.
+    ScreenLook,
+    /// `pgpu screen on` or `off`, or someone here stopped a device looking.
+    ScreenAccess,
 }
 
 impl Event {
@@ -105,6 +110,8 @@ impl Event {
             Self::AppOpen => "app_open",
             Self::AppsAccess => "apps_access",
             Self::Invite => "invite",
+            Self::ScreenLook => "screen_look",
+            Self::ScreenAccess => "screen_access",
         }
     }
 }

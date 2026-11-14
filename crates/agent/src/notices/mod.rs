@@ -49,6 +49,8 @@ pub enum Kind {
     AppOpen,
     /// A guest's time was up and its access ended (F44).
     GuestEnded,
+    /// A device started looking at the screen (F45).
+    ScreenLook,
 }
 
 impl Kind {
@@ -63,12 +65,16 @@ impl Kind {
                 | Self::ClipRead
                 | Self::AppOpen
                 | Self::GuestEnded
+                | Self::ScreenLook
         )
     }
 
     /// Shown at once each time, never grouped with others.
     pub fn alone(self) -> bool {
-        matches!(self, Self::Pair | Self::Terminal | Self::Power)
+        matches!(
+            self,
+            Self::Pair | Self::Terminal | Self::Power | Self::ScreenLook
+        )
     }
 
     /// Held back for [`HOLD`] and shown once for the whole batch, not first one by one.
@@ -192,6 +198,7 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         Event::FileGet if result == crate::audit::STARTED || result == "ok" => Kind::FileTaken,
         Event::ClipGet if result == "ok" => Kind::ClipRead,
         Event::AppOpen if result == "ok" => Kind::AppOpen,
+        Event::ScreenLook if result == "ok" => Kind::ScreenLook,
         _ => return None,
     })
 }

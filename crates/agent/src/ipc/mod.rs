@@ -102,6 +102,13 @@ where
                 }
                 continue;
             }
+            Request::GetScreen | Request::SetScreen { .. } | Request::StopScreen { .. } => {
+                let reply = crate::screen::local_request(&agent, req).await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::Notify { title, body } => {
                 let reply = match crate::alerts::sender::send_note(&agent, &title, &body).await {
                     Ok((phones, channels, held)) => Response::Notified {
@@ -339,9 +346,12 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         | Request::SetApps { .. }
         | Request::AddApp { .. }
         | Request::RemoveApp { .. }
-        | Request::SetAppOff { .. } => {
-            Response::Error("files, clipboard and apps requests run on the stream handler".into())
-        }
+        | Request::SetAppOff { .. }
+        | Request::GetScreen
+        | Request::SetScreen { .. }
+        | Request::StopScreen { .. } => Response::Error(
+            "files, clipboard, apps and screen requests run on the stream handler".into(),
+        ),
     }
 }
 

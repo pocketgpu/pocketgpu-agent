@@ -198,6 +198,9 @@ fn local_requests_keep_their_numbers() {
             },
             57,
         ),
+        (L::GetScreen, 58),
+        (L::SetScreen { on: true }, 59),
+        (L::StopScreen { device: None }, 60),
     ];
     for (req, n) in cases {
         assert_eq!(tag(&req), n, "{req:?} moved");
@@ -248,6 +251,14 @@ fn local_responses_keep_their_numbers() {
                 apps: vec![],
             }),
             33,
+        ),
+        (
+            L::Screen(pocketgpu_proto::local::ScreenStatus {
+                enabled: false,
+                why: None,
+                watching: vec![],
+            }),
+            34,
         ),
     ];
     for (res, n) in cases {
@@ -376,7 +387,9 @@ fn clip_messages_keep_their_numbers() {
 #[test]
 fn new_protocols_come_last() {
     use pocketgpu_proto::alpn;
-    assert_eq!(alpn::ALL.len(), 11);
+    assert_eq!(alpn::ALL.len(), 12);
+    assert_eq!(alpn::ALL[11], alpn::SCREEN);
+    assert_eq!(alpn::SCREEN, b"pgpu/screen/1");
     assert_eq!(alpn::ALL[8], alpn::FILES);
     assert_eq!(alpn::ALL[9], alpn::CLIP);
     assert_eq!(alpn::ALL[10], alpn::APPS);
@@ -445,4 +458,33 @@ fn guest_messages_keep_their_numbers() {
     };
     assert_eq!(tag(&r), 21);
     assert_eq!(tag(&Response::Guests(vec![])), 22);
+}
+
+#[test]
+fn screen_messages_keep_their_numbers() {
+    use pocketgpu_proto::screen::{Info, Request, Response};
+    assert_eq!(tag(&Request::Info), 0);
+    let peek = Request::Peek {
+        display: 0,
+        max_width: 1,
+    };
+    assert_eq!(tag(&peek), 1);
+    let watch = Request::Watch {
+        display: 0,
+        max_width: 1,
+        fps: 1,
+    };
+    assert_eq!(tag(&watch), 2);
+    let info = Response::Info(Info {
+        enabled: true,
+        displays: vec![],
+        why: None,
+    });
+    assert_eq!(tag(&info), 0);
+    assert_eq!(tag(&Response::Same { at_ms: 0 }), 2);
+    assert_eq!(tag(&Response::Stopped), 3);
+    assert_eq!(
+        tag(&Response::Error(Error::new(ErrorCode::Invalid, "x"))),
+        4
+    );
 }

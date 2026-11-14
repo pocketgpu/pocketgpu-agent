@@ -199,6 +199,17 @@ pub enum Request {
         port: u16,
         off: bool,
     },
+    /// Whether other devices may see this screen, and who looks now (F45). Replies `Screen`.
+    GetScreen,
+    /// Lets devices with Full control see this screen, or not; only here. Turning it off
+    /// stops everyone looking. Replies `Screen`.
+    SetScreen {
+        on: bool,
+    },
+    /// Stops one device looking now (its key), or everyone (`None`). Replies `Screen`.
+    StopScreen {
+        device: Option<String>,
+    },
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -227,6 +238,8 @@ impl NoticeLevel {
 pub enum Activity {
     Watching,
     Terminal,
+    /// Looking at the screen (F45).
+    Screen,
 }
 
 /// How a connected device reaches this computer.
@@ -390,6 +403,26 @@ pub enum Response {
     /// `None` when the clipboard is empty or holds no text.
     ClipText(Option<String>),
     Apps(crate::apps::Apps),
+    Screen(ScreenStatus),
+}
+
+/// The screen for other devices (F45), as `pgpu screen` and This PC show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenStatus {
+    pub enabled: bool,
+    /// Whether this machine has a screen to show, and why not.
+    pub why: Option<String>,
+    /// Who looks now.
+    pub watching: Vec<ScreenWatcher>,
+}
+
+/// A device looking at the screen now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenWatcher {
+    pub device: String,
+    pub name: String,
+    pub display: u32,
+    pub since_ms: i64,
 }
 
 /// Files for other devices (F40), as `pgpu files` shows them.

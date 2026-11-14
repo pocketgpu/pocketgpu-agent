@@ -104,6 +104,10 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             format!("{who}’s access ended"),
             format!("Its time on {machine} was up; it can no longer connect."),
         ),
+        Kind::ScreenLook => (
+            format!("{who} is looking at this screen"),
+            "Looking only. Stop it from PocketGPU's tray, or: pgpu screen stop".to_string(),
+        ),
     };
     Notice {
         title,
@@ -144,6 +148,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
         }
         Kind::Pair | Kind::Terminal | Kind::Power => ("used", "things"),
         Kind::GuestEnded => ("ended", "guests’ access"),
+        Kind::ScreenLook => ("looked at", "the screen"),
     };
     Notice {
         title: format!("{who} {verb} {count} {noun}"),

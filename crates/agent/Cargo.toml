@@ -47,6 +47,8 @@ http-body-util = "0.1"
 bytes = "1"
 # File hashes for transfers (F40).
 blake3.workspace = true
+# Screen pictures as JPEG (F45).
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -56,6 +58,10 @@ libc = "0.2"
 notify-rust = "4.18"
 # The desktop's clipboard (F41); text only, so no image support.
 arboard = { version = "3.7", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's picture from the X server, over its socket (F45).
+x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # IOKit and IOReport GPU stats on Apple silicon (F26).
@@ -74,6 +80,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    # Screen pictures (F45).
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
 ] }
 
 [dev-dependencies]

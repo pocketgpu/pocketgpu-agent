@@ -125,6 +125,8 @@ pub fn connected(agent: &Agent) -> anyhow::Result<Vec<ConnectedDevice>> {
                 platform: d.platform.clone(),
                 activity: if agent.shells.has_open(&k) {
                     Activity::Terminal
+                } else if agent.screen.has(&k.to_string()) {
+                    Activity::Screen
                 } else {
                     Activity::Watching
                 },

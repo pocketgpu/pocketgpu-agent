@@ -24,6 +24,7 @@ pub mod notify;
 mod pair;
 pub mod power;
 pub mod relay;
+pub mod screen;
 pub mod send;
 pub mod service;
 pub mod shell;
@@ -152,6 +153,11 @@ pub enum Command {
     Apps {
         #[command(subcommand)]
         action: Option<apps::Action>,
+    },
+    /// A live picture of this screen for your devices with Full control: status, on, off, stop.
+    Screen {
+        #[command(subcommand)]
+        action: Option<screen::Action>,
     },
     /// The clipboard for other devices: get (the default), put, clear, status, on or off.
     Clip {
@@ -286,6 +292,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Inbox => inbox::run(&paths, cli.json).await,
         Command::Send { file, to } => send::run(&paths, cli.json, file, to.clone()).await,
         Command::Apps { action } => apps::run(&paths, cli.json, action.clone()).await,
+        Command::Screen { action } => screen::run(&paths, cli.json, action.clone()).await,
         Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,

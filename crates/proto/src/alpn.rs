@@ -28,7 +28,10 @@ pub const CLIP: &[u8] = b"pgpu/clip/1";
 /// The machine's web apps and a way in to them, one stream per TCP connection (F42).
 pub const APPS: &[u8] = b"pgpu/apps/1";
 
+/// A live picture of the machine's screen, one stream per look (F45).
+pub const SCREEN: &[u8] = b"pgpu/screen/1";
+
 /// Every protocol the agent serves.
-pub const ALL: [&[u8]; 11] = [
-    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP, APPS,
+pub const ALL: [&[u8]; 12] = [
+    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP, APPS, SCREEN,
 ];

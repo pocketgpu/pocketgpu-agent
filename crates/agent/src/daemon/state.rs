@@ -32,6 +32,8 @@ pub struct Agent {
     pub running: crate::actions::Running,
     /// Terminal sessions (F16).
     pub shells: crate::shell::Shells,
+    /// Devices looking at the screen now (F45).
+    pub screen: crate::screen::Watchers,
     /// Woken by a local `Shutdown` request.
     pub stop: tokio::sync::Notify,
     /// Unix milliseconds.
@@ -87,6 +89,7 @@ impl Agent {
             jobs: Jobs::default(),
             running: Default::default(),
             shells: Default::default(),
+            screen: Default::default(),
             stop: tokio::sync::Notify::new(),
             started_ms: crate::store::db::now_ms(),
             alerts_paused_until: std::sync::atomic::AtomicI64::new(0),

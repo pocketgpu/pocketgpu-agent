@@ -20,6 +20,7 @@ pub mod notices;
 pub mod pair;
 pub mod power;
 pub mod release;
+pub mod screen;
 pub mod shell;
 pub mod store;
 pub mod tunnel;

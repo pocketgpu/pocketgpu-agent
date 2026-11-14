@@ -10,6 +10,7 @@ mod events;
 mod files;
 mod guests;
 pub mod local;
+pub mod screen;
 mod shell;
 pub mod sync;
 mod tunnel;
@@ -142,6 +143,7 @@ impl Client {
             files: Shared::default(),
             clip: Shared::default(),
             apps: Shared::default(),
+            screen: Shared::default(),
         })
     }
 
@@ -242,6 +244,7 @@ pub struct Machine {
     files: Shared,
     clip: Shared,
     apps: Shared,
+    screen: Shared,
 }
 
 /// A connection for one more protocol, opened on first use and then shared by every
@@ -402,6 +405,7 @@ impl Machine {
             &self.files,
             &self.clip,
             &self.apps,
+            &self.screen,
         ] {
             s.close();
         }
