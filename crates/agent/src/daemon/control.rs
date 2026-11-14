@@ -35,6 +35,20 @@ impl PeerProtocol for Control {
     }
 }
 
+fn is_guest(agent: &Agent, peer: &Peer) -> bool {
+    crate::store::devices::get(&agent.db(), &peer.key.to_string())
+        .ok()
+        .flatten()
+        .is_some_and(|d| d.expires_ms.is_some())
+}
+
+fn guests(agent: &Agent) -> Response {
+    match crate::pair::guest::list(agent) {
+        Ok(g) => Response::Guests(g),
+        Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
+    }
+}
+
 pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
     if let Err(e) = agent.require(peer, req.min_permission(), &describe(&req)) {
         return Response::Error(e);
@@ -150,6 +164,27 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 Err(e) => Response::Error(Error::new(ErrorCode::Forbidden, e)),
             }
         }
+        // Guests can't lend the machine on, or give themselves more time.
+        Request::CreateInvite { .. } | Request::ExtendGuest { .. } if is_guest(agent, peer) => {
+            Response::Error(Error::new(
+                ErrorCode::Forbidden,
+                "a guest can't invite others or give itself more time",
+            ))
+        }
+        Request::CreateInvite {
+            permission,
+            minutes,
+        } => match crate::pair::guest::invite(agent, &peer.key, permission, minutes).await {
+            Ok((uri, ends_ms)) => Response::Invite { uri, ends_ms },
+            Err(e) => Response::Error(Error::new(ErrorCode::Invalid, e)),
+        },
+        Request::ListGuests => guests(agent),
+        Request::ExtendGuest { device, minutes } => {
+            match crate::pair::guest::extend(agent, &peer.key, &device, minutes) {
+                Ok(()) => guests(agent),
+                Err(e) => Response::Error(Error::new(ErrorCode::Invalid, e)),
+            }
+        }
         Request::GetPower => Response::Power(crate::power::state(agent)),
         Request::PowerAction { action } => {
             let device = peer.key.to_string();
@@ -214,6 +249,9 @@ fn describe(req: &Request) -> String {
         Request::ListDevices => "ListDevices".into(),
         Request::RevokeDevice { .. } => "RevokeDevice".into(),
         Request::GetPower => "GetPower".into(),
+        Request::CreateInvite { permission, .. } => format!("CreateInvite {}", permission.as_str()),
+        Request::ListGuests => "ListGuests".into(),
+        Request::ExtendGuest { .. } => "ExtendGuest".into(),
         Request::PowerAction { action } => format!("PowerAction {}", action.as_str()),
     }
 }

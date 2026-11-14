@@ -8,6 +8,7 @@ mod clip;
 mod docker;
 mod events;
 mod files;
+mod guests;
 pub mod local;
 mod shell;
 pub mod sync;
@@ -28,6 +29,7 @@ pub use clip::ClipContent;
 pub use docker::ContainerLog;
 pub use events::EventStream;
 pub use files::{Downloaded, Saved};
+pub use guests::Invite;
 pub use shell::{ShellEvent, ShellOpened, ShellReceiver, ShellSender};
 pub use tunnel::OllamaReply;
 

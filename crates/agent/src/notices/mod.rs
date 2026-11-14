@@ -47,6 +47,8 @@ pub enum Kind {
     ClipRead,
     /// A device opened one of the machine's web apps (F42).
     AppOpen,
+    /// A guest's time was up and its access ended (F44).
+    GuestEnded,
 }
 
 impl Kind {
@@ -60,6 +62,7 @@ impl Kind {
                 | Self::FileSent
                 | Self::ClipRead
                 | Self::AppOpen
+                | Self::GuestEnded
         )
     }
 
@@ -183,6 +186,7 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         }
         Event::Container if result == "ok" => Kind::Container,
         Event::Revoke if result == REVOKED_BY_DEVICE => Kind::Revoke,
+        Event::Revoke if result == crate::pair::guest::GUEST_ENDED => Kind::GuestEnded,
         Event::Power if result == crate::power::COUNTING_DOWN => Kind::Power,
         Event::FilePut if result == "ok" => Kind::FileSent,
         Event::FileGet if result == crate::audit::STARTED || result == "ok" => Kind::FileTaken,

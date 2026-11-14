@@ -1,7 +1,9 @@
 //! Pairing a phone: the code slot, the `pgpu/pair/1` handler, and the `pgpu pair` session.
 
 pub mod code;
+pub mod guest;
 pub mod handler;
+pub mod invite;
 pub mod local;
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,6 +33,8 @@ const RENDEZVOUS_GRACE: Duration = Duration::from_secs(10);
 pub struct Pairing {
     slot: Mutex<Option<Slot>>,
     relays: OnceLock<Relays>,
+    /// Invites made by devices with Shell (F44): pairing approved in advance.
+    pub invites: invite::Invites,
 }
 
 #[derive(Debug)]

@@ -1,4 +1,5 @@
-//! `pgpu/pair/1`: the only protocol open to unknown keys, and only while a code is active.
+//! `pgpu/pair/1`: the only protocol open to unknown keys, and only while a code or an invite
+//! (F44) is active. A proof of an invite pairs at once, with the invite's level and end time.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,7 +37,7 @@ impl PairHandler {
 impl ProtocolHandler for PairHandler {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
         let device = conn.remote_id();
-        if !self.agent.pairing.is_open() {
+        if !self.agent.pairing.is_open() && !self.agent.pairing.invites.any_open() {
             tracing::info!(remote = %device.fmt_short(), "refused pairing: no active code");
             conn.close(403u32.into(), b"no pairing code");
             return Ok(());
@@ -61,6 +62,36 @@ async fn serve(
         .await
         .context("no request in time")??
         .context("stream closed before the request")?;
+
+    if let Some(grant) = agent
+        .pairing
+        .invites
+        .take(local, &device, &req.secret_proof)
+    {
+        let reply = match super::guest::join(agent, device, &req, &grant) {
+            Ok(()) => {
+                write_frame(
+                    &mut send,
+                    &Response::Pending {
+                        agent_id: *agent.identity.agent_id().as_bytes(),
+                        agent_name: agent.name(),
+                    },
+                )
+                .await?;
+                Response::Approved {
+                    permission: grant.permission,
+                    relays: agent
+                        .config
+                        .read()
+                        .expect("config lock poisoned")
+                        .relays
+                        .clone(),
+                }
+            }
+            Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
+        };
+        return finish(conn, &mut send, &reply).await;
+    }
 
     let asks = match agent.pairing.check(local, &device, &req.secret_proof) {
         Ok(asks) => asks,

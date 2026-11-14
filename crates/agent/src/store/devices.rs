@@ -17,6 +17,8 @@ pub struct Device {
     pub last_seen_ms: Option<i64>,
     /// The PocketGPU app on this computer (F35).
     pub this_pc: bool,
+    /// A guest's access ends then (Unix ms, F44); `None` for everyone else.
+    pub expires_ms: Option<i64>,
 }
 
 pub fn platform_str(p: Platform) -> &'static str {
@@ -66,7 +68,8 @@ pub fn mark_this_pc(db: &Connection, device_id: &str) -> Result<()> {
 
 pub fn list(db: &Connection) -> Result<Vec<Device>> {
     let mut stmt = db.prepare(
-        "SELECT device_id, name, platform, permission, paired_at, last_seen, this_pc FROM devices ORDER BY paired_at",
+        "SELECT device_id, name, platform, permission, paired_at, last_seen, this_pc, expires_ms
+         FROM devices ORDER BY paired_at",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Device {
@@ -77,9 +80,26 @@ pub fn list(db: &Connection) -> Result<Vec<Device>> {
             paired_at_ms: r.get(4)?,
             last_seen_ms: r.get(5)?,
             this_pc: r.get::<_, i64>(6)? != 0,
+            expires_ms: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Makes a device a guest whose access ends at `ends_ms`, or no longer a guest with `None`.
+pub fn set_expiry(db: &Connection, device_id: &str, ends_ms: Option<i64>) -> Result<bool> {
+    Ok(db.execute(
+        "UPDATE devices SET expires_ms = ?1 WHERE device_id = ?2",
+        params![ends_ms, device_id],
+    )? == 1)
+}
+
+/// Guests whose access has ended by `now_ms`.
+pub fn ended(db: &Connection, now_ms: i64) -> Result<Vec<Device>> {
+    Ok(list(db)?
+        .into_iter()
+        .filter(|d| d.expires_ms.is_some_and(|e| e <= now_ms))
+        .collect())
 }
 
 pub fn remove(db: &Connection, device_id: &str) -> Result<bool> {

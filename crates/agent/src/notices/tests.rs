@@ -227,3 +227,44 @@ fn the_migration_marks_an_app_paired_before_it() {
     let all = devices::list(&db).unwrap();
     assert!(all[0].this_pc);
 }
+
+#[test]
+fn guests_joining_and_ending_have_their_own_words() {
+    let db = crate::store::db::open_in_memory().unwrap();
+    crate::store::devices::upsert(
+        &db,
+        "g1",
+        "Alex's Pixel",
+        pocketgpu_proto::Platform::Android,
+        pocketgpu_proto::Permission::Control,
+        None,
+    )
+    .unwrap();
+    let joined = remote(
+        &db,
+        "g1",
+        Event::Pair,
+        "Alex's Pixel",
+        "control · guest for 8 hours · from Sam's iPhone",
+    )
+    .unwrap();
+    let n = text(&joined, "rig-1");
+    assert_eq!(n.title, "Alex's Pixel joined as a guest");
+    assert!(
+        n.body
+            .starts_with("Invited by Sam's iPhone: Can run actions, for 8 hours."),
+        "{}",
+        n.body
+    );
+    assert!(n.revoke.is_some());
+    let ended = remote(
+        &db,
+        "g1",
+        Event::Revoke,
+        "Alex's Pixel",
+        crate::pair::guest::GUEST_ENDED,
+    )
+    .unwrap();
+    assert_eq!(text(&ended, "rig-1").title, "Alex's Pixel’s access ended");
+    assert!(shown_at(NoticeLevel::Fewer, Kind::GuestEnded));
+}

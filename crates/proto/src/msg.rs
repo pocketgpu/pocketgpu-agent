@@ -245,6 +245,31 @@ pub mod control {
         GetIdleAlert,
         /// Changes it (Control); replies `IdleAlert`.
         SetIdleAlert(IdleAlert),
+        /// Lends the machine for a while (F44, Shell): a one-time invite, usable for 15
+        /// minutes, that pairs the device using it at once with `permission` until
+        /// `minutes` from now. Replies `Invite`. Agents before it answer with an error.
+        CreateInvite {
+            permission: Permission,
+            minutes: u32,
+        },
+        /// The guests now (Control, like `ListDevices`); replies `Guests`.
+        ListGuests,
+        /// Gives a guest more time (Shell); replies `Guests`.
+        ExtendGuest {
+            device: String,
+            minutes: u32,
+        },
+    }
+
+    /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Guest {
+        pub id: String,
+        pub name: String,
+        pub permission: Permission,
+        pub joined_ms: i64,
+        pub ends_ms: i64,
+        pub connected: bool,
     }
 
     /// F37: what a phone may ask the machine to do with its power.
@@ -354,6 +379,13 @@ pub mod control {
         },
         SystemHistory(Vec<SystemMinute>),
         IdleAlert(IdleAlert),
+        /// The `pocketgpu://pair?…` link to send or show as a QR code, and when the access
+        /// would end.
+        Invite {
+            uri: String,
+            ends_ms: i64,
+        },
+        Guests(Vec<Guest>),
     }
 
     /// The answer to `CheckUpdate`.
@@ -423,6 +455,7 @@ pub mod control {
                 Self::ListProcesses
                 | Self::KillProcess { .. }
                 | Self::ListDevices
+                | Self::ListGuests
                 | Self::PowerAction { .. }
                 | Self::RunAction { .. }
                 | Self::SetAlertSettings { .. }
@@ -432,7 +465,9 @@ pub mod control {
                 | Self::EditAction { .. }
                 | Self::DeleteAction { .. }
                 | Self::InstallUpdate { .. }
-                | Self::RevokeDevice { .. } => Permission::Shell,
+                | Self::RevokeDevice { .. }
+                | Self::CreateInvite { .. }
+                | Self::ExtendGuest { .. } => Permission::Shell,
             }
         }
     }

@@ -65,6 +65,9 @@ pub enum Event {
     AppOpen,
     /// `pgpu apps on`, `off`, `add`, `remove` or one app turned off or on.
     AppsAccess,
+    /// A device made an invite (F44; the target is the level, the result how long) or gave
+    /// a guest more time (the target is the guest).
+    Invite,
 }
 
 impl Event {
@@ -101,6 +104,7 @@ impl Event {
             Self::ClipAccess => "clip_access",
             Self::AppOpen => "app_open",
             Self::AppsAccess => "apps_access",
+            Self::Invite => "invite",
         }
     }
 }

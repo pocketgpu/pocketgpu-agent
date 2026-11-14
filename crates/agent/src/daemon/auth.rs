@@ -26,8 +26,10 @@ impl Agent {
         let db = self.db();
         let perm: Option<String> = db
             .query_row(
-                "SELECT permission FROM devices WHERE device_id = ?1",
-                [key.to_string()],
+                // A guest whose time is up has no permission, before the sweeper removes it.
+                "SELECT permission FROM devices WHERE device_id = ?1
+                 AND (expires_ms IS NULL OR expires_ms > ?2)",
+                rusqlite::params![key.to_string(), crate::store::db::now_ms()],
                 |r| r.get(0),
             )
             .optional()

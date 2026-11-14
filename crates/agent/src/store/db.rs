@@ -109,6 +109,8 @@ const MIGRATIONS: &[M<'static>] = &[
     );
     ",
     ),
+    // F44: a guest's access ends at this time (Unix ms); NULL for everyone else.
+    M::up("ALTER TABLE devices ADD COLUMN expires_ms INTEGER;"),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {

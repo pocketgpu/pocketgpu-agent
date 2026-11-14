@@ -18,6 +18,25 @@ const REVOKE_HINT: &str = "Revoke it in PocketGPU, or with: pgpu devices revoke"
 pub fn text(r: &Remote, machine: &str) -> Notice {
     let who = &r.name;
     let (title, body) = match r.kind {
+        // A guest (F44): "control · guest for 8 hours · from Sam's iPhone".
+        Kind::Pair if r.result.contains(" · guest ") => {
+            let mut parts = r.result.split(" · ");
+            let level = match parts.next().unwrap_or("view") {
+                "shell" => "Full control",
+                "control" => "Can run actions",
+                _ => "Can only look",
+            };
+            let how_long = parts.next().unwrap_or("guest").trim_start_matches("guest ");
+            let by = parts
+                .next()
+                .map_or("someone", |b| b.trim_start_matches("from "));
+            (
+                format!("{who} joined as a guest"),
+                format!(
+                    "Invited by {by}: {level}, {how_long}. It ends by itself. Not you? {REVOKE_HINT}"
+                ),
+            )
+        }
         Kind::Pair => {
             let perm = r.result.split(' ').next().unwrap_or("view");
             let what = match perm {
@@ -81,6 +100,10 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             format!("{who} opened {}", app_name(&r.target)),
             format!("On {machine}. It can use the app as you do here."),
         ),
+        Kind::GuestEnded => (
+            format!("{who}’s access ended"),
+            format!("Its time on {machine} was up; it can no longer connect."),
+        ),
     };
     Notice {
         title,
@@ -120,6 +143,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
             };
         }
         Kind::Pair | Kind::Terminal | Kind::Power => ("used", "things"),
+        Kind::GuestEnded => ("ended", "guests’ access"),
     };
     Notice {
         title: format!("{who} {verb} {count} {noun}"),

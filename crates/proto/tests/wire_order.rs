@@ -424,3 +424,25 @@ fn apps_messages_keep_their_numbers() {
     );
     assert_eq!(tag(&Response::Start { path: "/".into() }), 3);
 }
+
+#[test]
+fn guest_messages_keep_their_numbers() {
+    use pocketgpu_proto::msg::control::{Request, Response};
+    let invite = Request::CreateInvite {
+        permission: pocketgpu_proto::Permission::View,
+        minutes: 60,
+    };
+    assert_eq!(tag(&invite), 26);
+    assert_eq!(tag(&Request::ListGuests), 27);
+    let extend = Request::ExtendGuest {
+        device: "d".into(),
+        minutes: 60,
+    };
+    assert_eq!(tag(&extend), 28);
+    let r = Response::Invite {
+        uri: "u".into(),
+        ends_ms: 1,
+    };
+    assert_eq!(tag(&r), 21);
+    assert_eq!(tag(&Response::Guests(vec![])), 22);
+}
