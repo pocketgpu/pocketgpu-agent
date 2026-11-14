@@ -19,6 +19,10 @@ pub const JOIN_WITHIN: Duration = Duration::from_secs(15 * 60);
 pub const MAX_MINUTES: u32 = 7 * 24 * 60;
 /// Invites not used yet, at most.
 const MAX_OPEN: usize = 8;
+/// Wrong proofs before every open invite stops working (as for pairing codes).
+pub const MAX_WRONG: u8 = 8;
+/// Wrong proofs one key may send; later ones are refused without counting.
+pub const MAX_WRONG_PER_KEY: usize = 2;
 
 /// What a guest gets once it joins.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,18 +43,28 @@ struct Invite {
 }
 
 #[derive(Debug, Default)]
-pub struct Invites(Mutex<Vec<Invite>>);
+struct Open {
+    invites: Vec<Invite>,
+    /// Wrong proofs since the last invite was made, and the key behind each.
+    wrong: Vec<PublicKey>,
+}
+
+#[derive(Debug, Default)]
+pub struct Invites(Mutex<Open>);
 
 impl Invites {
-    fn list(&self) -> std::sync::MutexGuard<'_, Vec<Invite>> {
+    fn open(&self) -> std::sync::MutexGuard<'_, Open> {
         self.0.lock().expect("invites lock poisoned")
     }
 
     /// Keeps a new invite; its code's secret is slow to make (Argon2id), so the caller makes
     /// it off the async threads.
     pub fn add(&self, secret: [u8; 32], grant: Grant) -> Result<(), String> {
-        let mut list = self.list();
+        let mut open = self.open();
         let now = Instant::now();
+        // A new invite starts the count of wrong proofs again.
+        open.wrong.clear();
+        let list = &mut open.invites;
         list.retain(|i| i.join_until > now);
         if list.len() >= MAX_OPEN {
             return Err(format!(
@@ -68,7 +82,7 @@ impl Invites {
     /// Whether any invite may still be used: unknown keys may then try `pgpu/pair/1`.
     pub fn any_open(&self) -> bool {
         let now = Instant::now();
-        self.list().iter().any(|i| i.join_until > now)
+        self.open().invites.iter().any(|i| i.join_until > now)
     }
 
     /// The grant of the invite this proof is for, used up so it works once.
@@ -78,14 +92,32 @@ impl Invites {
         device: &PublicKey,
         given: &[u8; 32],
     ) -> Option<Grant> {
-        let mut list = self.list();
+        let mut open = self.open();
+        if open.wrong.iter().filter(|k| *k == device).count() >= MAX_WRONG_PER_KEY {
+            return None;
+        }
         let now = Instant::now();
+        let list = &mut open.invites;
         list.retain(|i| i.join_until > now);
         let at = list.iter().position(|i| {
             let expected = proof(&i.secret, endpoint.as_bytes(), device.as_bytes());
             proof_matches(&expected, given)
         })?;
         Some(list.remove(at).grant)
+    }
+
+    /// A proof that matched no invite and no pairing code: after [`MAX_WRONG`] of them,
+    /// every open invite stops working, so guessing one is as hard as guessing a code.
+    pub fn missed(&self, device: &PublicKey) {
+        let mut open = self.open();
+        if open.invites.is_empty() {
+            return;
+        }
+        open.wrong.push(*device);
+        if open.wrong.len() >= usize::from(MAX_WRONG) {
+            open.invites.clear();
+            open.wrong.clear();
+        }
     }
 }
 
@@ -136,6 +168,28 @@ mod tests {
         assert_eq!(invites.take(&endpoint, &device, &good), Some(grant()));
         assert!(invites.take(&endpoint, &device, &good).is_none());
         assert!(!invites.any_open());
+    }
+
+    #[test]
+    fn wrong_proofs_close_the_invites() {
+        let invites = Invites::default();
+        let secret = [7u8; 32];
+        invites.add(secret, grant()).unwrap();
+        let endpoint = iroh::SecretKey::from_bytes(&[1; 32]).public();
+        let device = iroh::SecretKey::from_bytes(&[2; 32]).public();
+        let good = proof(&secret, endpoint.as_bytes(), device.as_bytes());
+        // One key's wrong tries stop counting after two, and lock that key out.
+        let guesser = iroh::SecretKey::from_bytes(&[9; 32]).public();
+        invites.missed(&guesser);
+        invites.missed(&guesser);
+        let theirs = proof(&secret, endpoint.as_bytes(), guesser.as_bytes());
+        assert!(invites.take(&endpoint, &guesser, &theirs).is_none());
+        // Many keys guessing: every invite closes.
+        for i in 0..MAX_WRONG {
+            invites.missed(&iroh::SecretKey::from_bytes(&[20 + i; 32]).public());
+        }
+        assert!(!invites.any_open());
+        assert!(invites.take(&endpoint, &device, &good).is_none());
     }
 
     #[test]

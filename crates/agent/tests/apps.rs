@@ -180,3 +180,51 @@ async fn jupyter_opens_with_its_token_and_others_at_the_start() {
         ErrorCode::Forbidden
     );
 }
+
+/// An app that keeps each connection open and echoes what comes, like a Jupyter kernel's.
+async fn echo_app() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 256];
+                while let Ok(n) = s.read(&mut buf).await {
+                    if n == 0 || s.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_open_connection_ends_when_full_control_is_taken_away() {
+    let h = Harness::start().await;
+    let port = echo_app().await;
+    add(&h, port).await;
+    turn(&h, true).await;
+    let phone = h.phone(Some(Permission::Shell)).await;
+    let m = h.connect(&phone).await.unwrap();
+    let fwd = m.forward_app(port, Some(0)).await.unwrap();
+
+    let mut s = TcpStream::connect(fwd.local).await.unwrap();
+    s.write_all(b"hello").await.unwrap();
+    let mut buf = [0u8; 5];
+    s.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"hello");
+
+    // Lowered to Run actions: the open connection is closed within a few seconds.
+    pocketgpu::store::devices::set_permission(
+        &h.agent.db(),
+        &phone.key.public().to_string(),
+        Permission::Control,
+    )
+    .unwrap();
+    let mut rest = Vec::new();
+    let ended =
+        tokio::time::timeout(std::time::Duration::from_secs(5), s.read_to_end(&mut rest)).await;
+    assert!(ended.is_ok(), "the connection stayed open");
+}

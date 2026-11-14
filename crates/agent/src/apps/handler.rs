@@ -1,7 +1,8 @@
 //! `pgpu/apps/1` (F42): `List` gets one reply; `Open` is checked (Shell, apps on, the port
 //! allowed), connects to the app on this machine's `localhost`, answers `Opened` and then
 //! copies bytes both ways until either side ends. Permissions are checked on every stream,
-//! so a device that loses Shell can't open another connection.
+//! and again every second while one is open: a device that loses Shell (or apps turned off,
+//! or that app hidden) loses its open connections too, such as a Jupyter kernel's.
 
 use std::sync::Arc;
 
@@ -78,7 +79,25 @@ async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request, send: SendStream,
                 }
             };
             super::record_open(agent, peer.key.to_string(), port);
-            pipe(send, recv, tcp).await;
+            tokio::select! {
+                () = pipe(send, recv, tcp) => {}
+                () = still_allowed(agent, peer, port) => {}
+            }
+        }
+    }
+}
+
+/// Returns once the device may no longer use this app: checked every second.
+async fn still_allowed(agent: &Agent, peer: &Peer, port: u16) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        let shell = agent
+            .permission_of(&peer.key)
+            .is_some_and(|p| p >= pocketgpu_proto::Permission::Shell);
+        if !shell || super::check(agent, port).is_err() {
+            return;
         }
     }
 }

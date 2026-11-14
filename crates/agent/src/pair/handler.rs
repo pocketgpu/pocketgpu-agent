@@ -96,6 +96,7 @@ async fn serve(
     let asks = match agent.pairing.check(local, &device, &req.secret_proof) {
         Ok(asks) => asks,
         Err(refusal) => {
+            agent.pairing.invites.missed(&device);
             if let Err(e) = audit::record(
                 &agent.db(),
                 &device.to_string(),
