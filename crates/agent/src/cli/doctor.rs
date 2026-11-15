@@ -7,11 +7,12 @@ use std::time::Duration;
 use anyhow::Result;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, RelayMode, RelayUrl, Watcher as _};
+use pocketgpu_proto::GpuInfo;
 use pocketgpu_proto::local::{Request, Response};
 use serde::Serialize;
 
 use super::Silent;
-use crate::collect::{GpuCollector, nvml::NvmlGpus, ollama};
+use crate::collect::{self, ollama};
 use crate::daemon::root::{self, RootCheck};
 use crate::ipc::client;
 use crate::store::config::Config;
@@ -124,14 +125,31 @@ fn gpu() -> Check {
     if std::env::var("PGPU_FAKE_GPU").is_ok_and(|v| v != "0") {
         return Check::ok("GPU", "fake GPUs (PGPU_FAKE_GPU is set)");
     }
-    let gpus = NvmlGpus::init();
+    // The same collector the agent uses: the Apple GPU on a Mac, NVIDIA everywhere else.
+    let gpus = collect::from_env();
     if let Some(problem) = gpus.problem() {
         return Check::fail("GPU", problem);
     }
-    let info = gpus.info();
+    gpu_check(&gpus.info(), cfg!(target_os = "macos"))
+}
+
+/// The GPU line for what the collector found: on a Mac its one GPU with its cores, like
+/// `Apple M4 (10-core GPU · unified memory)`; elsewhere the NVIDIA GPUs and their driver, like
+/// `2 GPUs (NVIDIA GeForce RTX 4090) · driver 560.35`.
+pub fn gpu_check(info: &[GpuInfo], apple: bool) -> Check {
     let Some(first) = info.first() else {
-        return Check::fail("GPU", "the NVIDIA driver works but reports no GPUs");
+        let none = if apple {
+            "no Apple GPU found. The macOS agent needs an Apple silicon Mac"
+        } else {
+            "the NVIDIA driver works but reports no GPUs"
+        };
+        return Check::fail("GPU", none);
     };
+    if apple {
+        // The collector keeps the cores in `driver`: a Mac's GPU has no driver version.
+        let about = first.driver.as_deref().unwrap_or("unified memory");
+        return Check::ok("GPU", format!("{} ({about})", first.name));
+    }
     let driver = first
         .driver
         .as_deref()
@@ -335,6 +353,49 @@ mod tests {
         );
         assert!(relays_detail(&l[..1], None).contains("All relays are far"));
         assert_eq!(relays_detail(&[], None), "no relay answered");
+    }
+
+    fn gpu(name: &str, driver: Option<&str>) -> GpuInfo {
+        GpuInfo {
+            index: 0,
+            name: name.into(),
+            vram_total_mb: 16_384,
+            driver: driver.map(String::from),
+        }
+    }
+
+    #[test]
+    fn gpu_line_on_a_mac() {
+        let m4 = gpu("Apple M4", Some("10-core GPU · unified memory"));
+        assert_eq!(
+            gpu_check(&[m4], true),
+            Check::ok("GPU", "Apple M4 (10-core GPU · unified memory)")
+        );
+        // A GPU that doesn't report its cores still says its memory is unified.
+        assert_eq!(
+            gpu_check(&[gpu("Apple M1", None)], true).detail,
+            "Apple M1 (unified memory)"
+        );
+        let none = gpu_check(&[], true);
+        assert!(!none.ok);
+        assert!(none.detail.starts_with("no Apple GPU found"), "{none:?}");
+    }
+
+    #[test]
+    fn gpu_line_with_nvidia() {
+        let rtx = gpu("NVIDIA GeForce RTX 4090", Some("560.35"));
+        assert_eq!(
+            gpu_check(std::slice::from_ref(&rtx), false).detail,
+            "NVIDIA GeForce RTX 4090 · driver 560.35"
+        );
+        assert_eq!(
+            gpu_check(&[rtx.clone(), rtx], false).detail,
+            "2 GPUs (NVIDIA GeForce RTX 4090) · driver 560.35"
+        );
+        assert_eq!(
+            gpu_check(&[], false),
+            Check::fail("GPU", "the NVIDIA driver works but reports no GPUs")
+        );
     }
 
     #[test]
