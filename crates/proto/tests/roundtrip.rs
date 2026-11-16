@@ -179,6 +179,11 @@ fn permissions_are_ordered() {
         control::Request::DeleteAction { id: 1 }.min_permission(),
         Permission::Shell
     );
+    // A command's output can hold more than its name: View devices don't read it.
+    assert_eq!(
+        control::Request::LastAnswers { lines: 3 }.min_permission(),
+        Permission::Control
+    );
     assert_eq!(
         jobs::Request::StopJob { id: 1 }.min_permission(),
         Permission::Control

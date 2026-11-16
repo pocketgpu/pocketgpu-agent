@@ -67,6 +67,14 @@ pub fn runs(agent: &Agent, limit: u32) -> Response {
     }
 }
 
+/// Each saved command's newest finished run with the end of its output (board 70).
+pub fn last_answers(agent: &Agent, lines: u32) -> Response {
+    match store::last_answers(&agent.db(), lines) {
+        Ok(a) => Response::Answers(a),
+        Err(e) => internal(e),
+    }
+}
+
 pub fn create(agent: &Agent, peer: &Peer, new: &NewAction) -> Response {
     let res = validate(new)
         .map_err(StoreError::from)

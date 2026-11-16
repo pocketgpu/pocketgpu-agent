@@ -452,12 +452,14 @@ fn guest_messages_keep_their_numbers() {
         minutes: 60,
     };
     assert_eq!(tag(&extend), 28);
+    assert_eq!(tag(&Request::LastAnswers { lines: 3 }), 29);
     let r = Response::Invite {
         uri: "u".into(),
         ends_ms: 1,
     };
     assert_eq!(tag(&r), 21);
     assert_eq!(tag(&Response::Guests(vec![])), 22);
+    assert_eq!(tag(&Response::Answers(vec![])), 23);
 }
 
 #[test]

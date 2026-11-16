@@ -1,7 +1,7 @@
 //! Actions and their runs in SQLite (`actions`, `action_runs`).
 
 use anyhow::Result;
-use pocketgpu_proto::msg::control::{Action, ActionRun};
+use pocketgpu_proto::msg::control::{Action, ActionRun, LastAnswer};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Invalid, Valid};
@@ -159,6 +159,53 @@ pub fn runs(db: &Connection, limit: u32) -> Result<Vec<ActionRun>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Most lines `last_answers` sends per command, and the longest line.
+const MAX_TAIL_LINES: u32 = 20;
+const MAX_LINE_CHARS: usize = 200;
+
+/// Each action's newest finished run with its last `lines` lines that aren't blank.
+pub fn last_answers(db: &Connection, lines: u32) -> Result<Vec<LastAnswer>> {
+    let mut stmt = db.prepare(
+        "SELECT r.run_id, r.action_id, r.started_at, r.ended_at, r.exit_code, r.output,
+                a.timeout_s
+         FROM action_runs r
+         JOIN actions a ON a.action_id = r.action_id
+         WHERE r.run_id IN (SELECT MAX(run_id) FROM action_runs
+                            WHERE ended_at IS NOT NULL GROUP BY action_id)
+         ORDER BY r.action_id",
+    )?;
+    let keep = lines.min(MAX_TAIL_LINES) as usize;
+    let rows = stmt.query_map([], |r| {
+        let started: i64 = r.get(2)?;
+        let ended: i64 = r.get(3)?;
+        let exit_code: Option<i32> = r.get(4)?;
+        let output: Option<String> = r.get(5)?;
+        let timeout_s: i64 = r.get(6)?;
+        Ok(LastAnswer {
+            run_id: r.get::<_, i64>(0)? as u64,
+            action_id: r.get::<_, i64>(1)? as u64,
+            ended_ms: ended as u64,
+            exit_code,
+            timed_out: exit_code.is_none() && ended - started >= timeout_s * 1000,
+            tail: tail(output.as_deref().unwrap_or(""), keep),
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The last `keep` lines that aren't blank, oldest first, each cut to `MAX_LINE_CHARS`.
+fn tail(output: &str, keep: usize) -> Vec<String> {
+    let mut lines: Vec<String> = output
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(keep)
+        .map(|l| l.trim_end().chars().take(MAX_LINE_CHARS).collect())
+        .collect();
+    lines.reverse();
+    lines
+}
+
 pub fn prune(db: &Connection, now_ms: i64) -> Result<usize> {
     let cutoff = now_ms - KEEP_RUNS_DAYS * 24 * 3600 * 1000;
     Ok(db.execute("DELETE FROM action_runs WHERE started_at < ?1", [cutoff])?)
@@ -213,5 +260,30 @@ mod tests {
         assert_eq!(listed[1].exit_code, Some(0));
         let day = 24 * 3600 * 1000;
         assert_eq!(prune(&db, 5_000 + KEEP_RUNS_DAYS * day).unwrap(), 1);
+    }
+
+    #[test]
+    fn last_answers_are_the_newest_finished_runs_with_their_last_lines() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        let a = create(&db, &valid("Status")).unwrap();
+        let b = create(&db, &valid("Clean")).unwrap();
+        let old = start_run(&db, a.id, None, 1_000).unwrap();
+        end_run(&db, old, 2_000, Some(0), "old\n").unwrap();
+        let newer = start_run(&db, a.id, None, 3_000).unwrap();
+        end_run(&db, newer, 4_000, Some(0), "one\n\ntwo\nthree  \n\n").unwrap();
+        start_run(&db, a.id, Some("phone"), 5_000).unwrap();
+        let failed = start_run(&db, b.id, None, 6_000).unwrap();
+        end_run(&db, failed, 7_000, Some(1), "rm: Permission denied").unwrap();
+        let got = last_answers(&db, 2).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].run_id, newer);
+        assert_eq!(got[0].tail, vec!["two", "three"]);
+        assert_eq!(got[1].action_id, b.id);
+        assert_eq!(got[1].exit_code, Some(1));
+        assert!(!got[1].timed_out);
+        assert_eq!(got[1].tail, vec!["rm: Permission denied"]);
+        let long = "x".repeat(500);
+        assert_eq!(tail(&long, 20)[0].chars().count(), MAX_LINE_CHARS);
+        assert_eq!(last_answers(&db, 99).unwrap()[0].tail.len(), 3);
     }
 }

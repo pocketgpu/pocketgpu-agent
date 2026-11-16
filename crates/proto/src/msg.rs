@@ -124,6 +124,20 @@ pub mod control {
         pub timed_out: bool,
     }
 
+    /// A saved command's newest finished run with the end of its output, for its answer on
+    /// the Commands tab.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct LastAnswer {
+        pub action_id: u64,
+        pub run_id: u64,
+        pub ended_ms: u64,
+        /// `None` when it was stopped by a signal or the timeout.
+        pub exit_code: Option<i32>,
+        pub timed_out: bool,
+        /// Its last lines that aren't blank, oldest first, each cut at 200 characters.
+        pub tail: Vec<String>,
+    }
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum AlertKind {
         JobEnd,
@@ -259,6 +273,13 @@ pub mod control {
             device: String,
             minutes: u32,
         },
+        /// Each saved command's newest finished run with the last `lines` lines it printed
+        /// (at most 20), for the answers on the Commands tab (board 70); replies `Answers`.
+        /// Control, like running it. Agents before it answer with an error, and the phone
+        /// says how the run went.
+        LastAnswers {
+            lines: u32,
+        },
     }
 
     /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
@@ -386,6 +407,7 @@ pub mod control {
             ends_ms: i64,
         },
         Guests(Vec<Guest>),
+        Answers(Vec<LastAnswer>),
     }
 
     /// The answer to `CheckUpdate`.
@@ -458,6 +480,8 @@ pub mod control {
                 | Self::ListGuests
                 | Self::PowerAction { .. }
                 | Self::RunAction { .. }
+                // What a command printed can hold more than its name: as much as running it.
+                | Self::LastAnswers { .. }
                 | Self::SetAlertSettings { .. }
                 | Self::SetIdleAlert(_) => Permission::Control,
                 // Replacing the agent's own program is as much as terminal access.
