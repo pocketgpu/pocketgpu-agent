@@ -18,17 +18,17 @@ mod windows;
 #[cfg(target_os = "macos")]
 use launchd as platform;
 #[cfg(target_os = "macos")]
-pub use launchd::{log_path, restart, state};
+pub use launchd::{is_this_process, log_path, restart, state};
 #[cfg(not(any(windows, target_os = "macos")))]
 use systemd as platform;
 #[cfg(not(any(windows, target_os = "macos")))]
-pub use systemd::{UNIT, restart, state, unit_file};
+pub use systemd::{UNIT, is_this_process, restart, state, unit_file};
 #[cfg(windows)]
 use windows as platform;
 #[cfg(windows)]
 pub use windows::{
-    restart, restart_after_stop, restart_detached, start as start_background, start_when_stopped,
-    state,
+    is_this_process, restart, restart_after_stop, restart_detached, start as start_background,
+    start_when_stopped, state,
 };
 
 /// Whether a Windows login entry's command starts this agent: `"…\pocketgpu.exe" agent

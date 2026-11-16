@@ -40,8 +40,8 @@ async fn only_shell_phones_may_install_an_update() {
             .await,
     );
     assert_eq!(code, ErrorCode::Invalid);
-    // The test agent isn't a service (or runs in a container), so it couldn't restart into
-    // the new version: refused with a reason.
+    // The test agent isn't the service, even on a machine where one runs (or it runs in a
+    // container), so it couldn't restart into the new version: refused with a reason.
     let (code, why) = refused(machine.control(install()).await);
     assert_eq!(code, ErrorCode::Busy, "{why}");
     assert!(

@@ -39,8 +39,7 @@ pub async fn check() -> Response {
             .as_deref()
             .is_some_and(|t| release::is_newer(t, CURRENT)),
         latest: latest.map(|t| t.trim_start_matches('v').to_string()),
-        // Asking the service manager runs a program.
-        blocked: tokio::task::spawn_blocking(blocked).await.unwrap_or(None),
+        blocked: blocked(),
     })
 }
 
@@ -55,7 +54,10 @@ fn blocked() -> Option<String> {
             std::env::consts::ARCH
         ));
     }
-    if crate::cli::service::state() != "active" {
+    // This process must be the service, not merely share the machine with one: an agent
+    // started by hand, a dev build or a test would swap its own binary and then restart the
+    // service's agent instead of itself.
+    if !crate::cli::service::is_this_process() {
         return Some(
             "The agent isn't running as a service here, so it can't restart itself. Run pgpu update on the machine"
                 .into(),
@@ -87,7 +89,7 @@ pub async fn install(agent: &std::sync::Arc<Agent>, peer: &Peer, version: &str) 
             format!("{version} is not a release version"),
         );
     }
-    if let Some(why) = tokio::task::spawn_blocking(blocked).await.unwrap_or(None) {
+    if let Some(why) = blocked() {
         return refuse(ErrorCode::Busy, why);
     }
     if release::same_version(&tag, CURRENT) {

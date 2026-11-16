@@ -28,13 +28,17 @@ pub mod tunnel;
 pub mod winsys;
 
 /// The agent's own environment, kept from what phones start (terminals and actions): test
-/// switches, the restricted-token marker and the service manager's variables.
+/// switches, the restricted-token and service markers and the service manager's variables,
+/// which also tell the service's agent from one started in its terminal
+/// (`cli::service::is_this_process`).
 pub const AGENT_ONLY_ENV: &[&str] = &[
     "PGPU_FAKE_GPU",
     "PGPU_FAKE_POWER",
     "PGPU_CLIPBOARD",
     "PGPU_UNELEVATED",
+    "PGPU_SERVICE",
     "RUST_LOG",
     "INVOCATION_ID",
     "JOURNAL_STREAM",
+    "XPC_SERVICE_NAME",
 ];

@@ -96,6 +96,25 @@ pub fn state() -> &'static str {
     }
 }
 
+/// Whether this process is the service itself: systemd sets `INVOCATION_ID` in what it
+/// starts, and the control group names the unit. Terminals and actions started from phones run
+/// in the unit's group too, but without `INVOCATION_ID` (`AGENT_ONLY_ENV`), so an agent
+/// started by hand, a dev build or a test never counts, even while the service runs.
+pub fn is_this_process() -> bool {
+    std::env::var_os("INVOCATION_ID").is_some_and(|id| !id.is_empty())
+        && std::fs::read_to_string("/proc/self/cgroup").is_ok_and(|c| in_unit(&c))
+}
+
+/// Whether `/proc/self/cgroup` puts this process in the unit under the user's service
+/// manager: `0::/user.slice/user-1000.slice/user@1000.service/app.slice/pocketgpu.service`
+/// (cgroup v2), or that path on the `name=systemd` line (v1).
+fn in_unit(cgroup: &str) -> bool {
+    cgroup.lines().any(|line| {
+        let mut dirs = line.rsplit('/');
+        dirs.next() == Some(UNIT) && dirs.any(|d| d.starts_with("user@"))
+    })
+}
+
 /// Restarts the running service, so it picks up a new binary.
 pub fn restart() -> Result<()> {
     systemctl(&["restart", UNIT])
@@ -157,5 +176,33 @@ fn linger() -> Option<bool> {
         "yes" => Some(true),
         "no" => Some(false),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_unit;
+
+    #[test]
+    fn only_the_user_unit_is_the_service() {
+        // cgroup v2 with and without app.slice, and v1's named hierarchy.
+        assert!(in_unit(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/pocketgpu.service\n"
+        ));
+        assert!(in_unit(
+            "0::/user.slice/user-1000.slice/user@1000.service/pocketgpu.service\n"
+        ));
+        assert!(in_unit(
+            "4:memory:/user.slice/user-1000.slice/user@1000.service\n\
+             1:name=systemd:/user.slice/user-1000.slice/user@1000.service/pocketgpu.service\n"
+        ));
+        // A desktop terminal, an SSH login, a system unit of the same name, a container.
+        assert!(!in_unit(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.gnome.Terminal.slice/vte-spawn-1.scope\n"
+        ));
+        assert!(!in_unit("0::/user.slice/user-1000.slice/session-3.scope\n"));
+        assert!(!in_unit("0::/system.slice/pocketgpu.service\n"));
+        assert!(!in_unit("0::/\n"));
+        assert!(!in_unit(""));
     }
 }

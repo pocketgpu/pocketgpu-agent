@@ -135,6 +135,14 @@ pub fn state() -> &'static str {
     }
 }
 
+/// Whether this process is the login agent itself: launchd names the job it starts in
+/// `XPC_SERVICE_NAME`. Terminals and actions started from phones don't inherit it
+/// (`AGENT_ONLY_ENV`), so an agent started by hand, a dev build or a test never counts, even
+/// while the login agent runs.
+pub fn is_this_process() -> bool {
+    std::env::var_os("XPC_SERVICE_NAME").is_some_and(|name| name == LABEL)
+}
+
 /// Restarts the running agent, so it picks up a new binary.
 pub fn restart() -> Result<()> {
     launchctl(&["kickstart", "-k", &format!("{}/{LABEL}", domain())])

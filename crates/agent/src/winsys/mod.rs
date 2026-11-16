@@ -273,6 +273,10 @@ pub fn has_login_entry() -> bool {
     has_run_value(RUN_VALUE) || legacy_agent_entry()
 }
 
+/// Set in the agent `spawn_background` starts: the one the login entry runs, which can update
+/// and restart itself (`cli::service::is_this_process`).
+pub const SERVICE_MARKER: &str = "PGPU_SERVICE";
+
 /// Starts `pocketgpu agent` with no console window, logging to `log`.
 pub fn spawn_background(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     let out = std::fs::OpenOptions::new()
@@ -283,6 +287,7 @@ pub fn spawn_background(exe: &std::path::Path, log: &std::path::Path) -> Result<
     keep_std_handles_private();
     Command::new(exe)
         .arg("agent")
+        .env(SERVICE_MARKER, "1")
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(out)

@@ -47,6 +47,14 @@ pub fn state() -> &'static str {
     }
 }
 
+/// Whether this process is the agent the login entry runs: `start` marks the agent it starts
+/// (at login, after `pgpu service install` and after an update). Terminals and actions started
+/// from phones don't inherit the mark (`AGENT_ONLY_ENV`), so an agent started by hand, a dev
+/// build or a test never counts, even while the background agent runs.
+pub fn is_this_process() -> bool {
+    std::env::var_os(winsys::SERVICE_MARKER).is_some()
+}
+
 /// Stops the running agent and starts it again, so it picks up a new binary or relays.
 pub fn restart() -> Result<()> {
     stop()?;
