@@ -16,9 +16,9 @@ use crate::cli::update as cli;
 use crate::release;
 
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
-/// How long the newest release found is reused. GitHub allows 60 unauthenticated lookups an
-/// hour per address, and this is at most 4 per machine; a release shows on phones within
-/// about half an hour (this, then the phone's own `FRESH_MS`).
+/// How long the newest release found is reused, so phones opening the machine don't each ask
+/// GitHub; a release shows on phones within about half an hour (this, then the phone's own
+/// `FRESH_MS`).
 const FRESH: Duration = Duration::from_secs(15 * 60);
 /// Time for the reply to reach the phone before the agent goes away.
 const BEFORE_RESTART: Duration = Duration::from_millis(1500);
@@ -70,8 +70,7 @@ async fn latest_tag() -> anyhow::Result<String> {
     {
         return Ok(tag.clone());
     }
-    let client = cli::client()?;
-    let tag = cli::latest_tag(&client, &cli::repo()).await?;
+    let tag = cli::latest_tag(&cli::repo()).await?;
     *LATEST.lock().expect("update lock poisoned") = Some((Instant::now(), tag.clone()));
     Ok(tag)
 }

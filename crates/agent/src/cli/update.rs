@@ -16,6 +16,7 @@ use crate::release;
 /// `web/static/install`; `PGPU_REPO` overrides it.
 const DEFAULT_REPO: &str = "pocketgpu/pocketgpu-releases";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+const USER_AGENT: &str = concat!("pocketgpu/", env!("CARGO_PKG_VERSION"));
 
 pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
     if crate::daemon::root::in_container() {
@@ -27,7 +28,7 @@ pub async fn run(json: bool, check: bool, version: Option<&str>) -> Result<()> {
     let client = client()?;
     let tag = match version {
         Some(v) => format!("v{}", v.trim_start_matches('v')),
-        None => latest_tag(&client, &repo).await?,
+        None => latest_tag(&repo).await?,
     };
     if release::parse_version(&tag).is_none() {
         bail!("{tag} is not a release version");
@@ -93,8 +94,24 @@ pub fn repo() -> String {
 
 pub fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .user_agent(concat!("pocketgpu/", env!("CARGO_PKG_VERSION")))
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(300))
+        .build()?)
+}
+
+/// A client for finding the latest release: it stops at the redirect that names the tag. It
+/// follows only redirects to another `releases/latest`, where a renamed repository sends it.
+fn lookup_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() < 5 && attempt.url().path().ends_with("/releases/latest") {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .build()?)
 }
 
@@ -116,28 +133,96 @@ pub async fn fetch(client: &reqwest::Client, repo: &str, tag: &str) -> Result<Ve
     release::extract_binary(&archive)
 }
 
-pub async fn latest_tag(client: &reqwest::Client, repo: &str) -> Result<String> {
+/// The latest release's tag. github.com answers `releases/latest` with a redirect to that
+/// release, `…/releases/tag/v1.2.3`. GitHub's API says the same but allows only 60 lookups an
+/// hour per public address, shared by everyone behind it (offices, phone carriers, cloud GPU
+/// providers), so it is asked only when the redirect no longer looks like that.
+pub async fn latest_tag(repo: &str) -> Result<String> {
+    let client = lookup_client()?;
+    let req = client.get(format!("https://github.com/{repo}/releases/latest"));
+    let res = look_up(req, repo).await?;
+    let location = res
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|l| l.to_str().ok());
+    match location.map_or(Latest::Unknown, read_latest) {
+        Latest::Release(tag) => Ok(tag),
+        Latest::NoReleases => bail!("{repo} has no releases yet"),
+        Latest::Unknown => {
+            tracing::info!(
+                status = %res.status(),
+                ?location,
+                "github.com's redirect to the latest release looks different; asking GitHub's API"
+            );
+            latest_tag_from_api(&client, repo).await
+        }
+    }
+}
+
+async fn latest_tag_from_api(client: &reqwest::Client, repo: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Release {
         tag_name: String,
     }
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let res = client
-        .get(&url)
-        .header("accept", "application/vnd.github+json")
+    let req = client
+        .get(format!(
+            "https://api.github.com/repos/{repo}/releases/latest"
+        ))
+        .header("accept", "application/vnd.github+json");
+    let latest: Release = look_up(req, repo)
+        .await?
+        .json()
+        .await
+        .context("GitHub sent an unexpected reply")?;
+    if release::parse_version(&latest.tag_name).is_none() {
+        bail!(
+            "the latest release, {}, is not a release version",
+            latest.tag_name
+        );
+    }
+    Ok(latest.tag_name)
+}
+
+/// Sends a lookup to GitHub. A 404 means the repository isn't there or has no release.
+async fn look_up(req: reqwest::RequestBuilder, repo: &str) -> Result<reqwest::Response> {
+    let res = req
         .send()
         .await
         .context("could not reach GitHub to look for an update")?;
     if res.status() == reqwest::StatusCode::NOT_FOUND {
         bail!("{repo} has no releases yet");
     }
-    let release: Release = res
-        .error_for_status()
-        .context("could not look up the latest release")?
-        .json()
-        .await
-        .context("GitHub sent an unexpected reply")?;
-    Ok(release.tag_name)
+    res.error_for_status()
+        .context("could not look up the latest release")
+}
+
+/// Where github.com's redirect for `releases/latest` points.
+#[derive(Debug, PartialEq)]
+enum Latest {
+    /// The latest release's page, `…/releases/tag/v1.2.3`.
+    Release(String),
+    /// The list of releases, while there are none yet.
+    NoReleases,
+    /// Anywhere else, including a tag that isn't a version.
+    Unknown,
+}
+
+/// Reads the `location` of github.com's redirect for `releases/latest`: the tag is the last
+/// part of the path.
+fn read_latest(location: &str) -> Latest {
+    let path = location.split(['?', '#']).next().unwrap_or_default();
+    let last = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    if last == "releases" {
+        Latest::NoReleases
+    } else if release::parse_version(last).is_some() {
+        Latest::Release(last.to_string())
+    } else {
+        Latest::Unknown
+    }
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
@@ -240,6 +325,51 @@ mod old_binary_tests {
         assert!(!is_old_binary("pocketgpu.exe"));
         assert!(!is_old_binary(".pocketgpu.new.exe"));
         assert!(!is_old_binary("pocketgpu.stale.exe"));
+    }
+}
+
+#[cfg(test)]
+mod latest_tests {
+    use super::{Latest, read_latest};
+
+    const RELEASES: &str = "https://github.com/pocketgpu/pocketgpu-releases/releases";
+
+    #[test]
+    fn reads_the_tag() {
+        for (location, tag) in [
+            (format!("{RELEASES}/tag/v1.2.31"), "v1.2.31"),
+            (format!("{RELEASES}/tag/v1.2.31/"), "v1.2.31"),
+            (format!("{RELEASES}/tag/v1.2.31?a=b#c"), "v1.2.31"),
+            (format!("{RELEASES}/tag/v1.3.0-rc.1"), "v1.3.0-rc.1"),
+            (
+                "/pocketgpu/pocketgpu-releases/releases/tag/v2.0.0".into(),
+                "v2.0.0",
+            ),
+        ] {
+            let want = Latest::Release(tag.into());
+            assert_eq!(read_latest(&location), want, "{location}");
+        }
+    }
+
+    #[test]
+    fn no_tag_means_no_releases() {
+        assert_eq!(read_latest(RELEASES), Latest::NoReleases);
+        assert_eq!(read_latest(&format!("{RELEASES}/")), Latest::NoReleases);
+    }
+
+    #[test]
+    fn anything_else_is_unknown() {
+        for location in [
+            format!("{RELEASES}/tag/nightly"),
+            format!("{RELEASES}/tag/v1.2"),
+            format!("{RELEASES}/latest"),
+            "https://github.com/login?return_to=%2Fpocketgpu%2Fpocketgpu-releases%2Freleases"
+                .into(),
+            "https://github.com/".into(),
+            String::new(),
+        ] {
+            assert_eq!(read_latest(&location), Latest::Unknown, "{location}");
+        }
     }
 }
 
