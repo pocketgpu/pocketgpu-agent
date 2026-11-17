@@ -2,7 +2,7 @@
 //! on it (F17, F18).
 
 use iroh::endpoint::{Connection, RecvStream};
-use pocketgpu_proto::ai::ModelServer;
+use pocketgpu_proto::ai::{ModelServer, OllamaSetup};
 use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone};
 use pocketgpu_proto::{alpn, read_frame, write_frame};
 
@@ -52,6 +52,18 @@ impl Machine {
         let bytes = self.tunnel(ToAgent::Servers).await?.body().await?;
         serde_json::from_slice(&bytes)
             .map_err(|e| ClientError::Connection(format!("model servers: {e}")))
+    }
+
+    /// Sets up Ollama on the machine (`start`, Shell), or asks how far it is (board 87). An
+    /// agent too old to do it closes the stream (`ClientError::NoReply`).
+    pub async fn ollama_setup(&self, start: bool) -> Result<OllamaSetup, ClientError> {
+        let bytes = self
+            .tunnel(ToAgent::SetUpOllama { start })
+            .await?
+            .body()
+            .await?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::Connection(format!("Ollama setup: {e}")))
     }
 
     async fn tunnel(&self, req: ToAgent) -> Result<OllamaReply, ClientError> {

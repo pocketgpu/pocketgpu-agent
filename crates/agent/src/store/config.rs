@@ -47,6 +47,8 @@ pub struct Config {
     pub screen: bool,
     /// Model servers besides Ollama on other ports, added with `pgpu ai add` (F18).
     pub ai_added: Vec<AddedApp>,
+    /// Ollama that a phone set up on Linux, in PocketGPU's folder: the agent starts it (board 87).
+    pub ollama_managed: bool,
 }
 
 /// A port added with `pgpu apps add` or `pgpu ai add`.
@@ -95,6 +97,7 @@ impl Default for Config {
             apps_off: Vec::new(),
             screen: false,
             ai_added: Vec::new(),
+            ollama_managed: false,
         }
     }
 }

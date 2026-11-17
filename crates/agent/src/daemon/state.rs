@@ -34,6 +34,8 @@ pub struct Agent {
     pub shells: crate::shell::Shells,
     /// Devices looking at the screen now (F45).
     pub screen: crate::screen::Watchers,
+    /// Setting up Ollama from a phone (board 87).
+    pub ollama_setup: crate::ai::setup::State,
     /// Woken by a local `Shutdown` request.
     pub stop: tokio::sync::Notify,
     /// Unix milliseconds.
@@ -90,6 +92,7 @@ impl Agent {
             running: Default::default(),
             shells: Default::default(),
             screen: Default::default(),
+            ollama_setup: Default::default(),
             stop: tokio::sync::Notify::new(),
             started_ms: crate::store::db::now_ms(),
             alerts_paused_until: std::sync::atomic::AtomicI64::new(0),

@@ -108,6 +108,10 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             format!("{who} is looking at this screen"),
             "Looking only. Stop it from PocketGPU's tray, or: pgpu screen stop".to_string(),
         ),
+        Kind::OllamaSetup => (
+            format!("{who} is setting up Ollama"),
+            format!("On {machine}, as you: Ollama's own download, then it starts."),
+        ),
     };
     Notice {
         title,
@@ -146,7 +150,7 @@ pub fn summary(r: &Remote, count: u32, machine: &str) -> Notice {
                 cancel_power: false,
             };
         }
-        Kind::Pair | Kind::Terminal | Kind::Power => ("used", "things"),
+        Kind::Pair | Kind::Terminal | Kind::Power | Kind::OllamaSetup => ("used", "things"),
         Kind::GuestEnded => ("ended", "guests’ access"),
         Kind::ScreenLook => ("looked at", "the screen"),
     };

@@ -48,7 +48,7 @@ impl PeerProtocol for Tunnel {
 }
 
 async fn forward(
-    agent: &Agent,
+    agent: &Arc<Agent>,
     peer: &Peer,
     http: &reqwest::Client,
     request: ToAgent,
@@ -89,10 +89,28 @@ async fn forward(
             };
             pipe(http, &base, call, send, &name).await
         }
-        ToAgent::Servers => {
-            agent.require(peer, Permission::View, "model servers")?;
-            let list = crate::ai::servers(agent).await;
-            let json = serde_json::to_vec(&list).unwrap_or_default();
+        ToAgent::Servers | ToAgent::SetUpOllama { .. } => {
+            let json = match request {
+                ToAgent::SetUpOllama { start } => {
+                    let needed = if start {
+                        Permission::Shell
+                    } else {
+                        Permission::View
+                    };
+                    agent.require(peer, needed, "set up Ollama")?;
+                    let setup = if start {
+                        crate::ai::setup::start(agent, &peer.key.to_string())
+                    } else {
+                        agent.ollama_setup.get()
+                    };
+                    serde_json::to_vec(&setup)
+                }
+                _ => {
+                    agent.require(peer, Permission::View, "model servers")?;
+                    serde_json::to_vec(&crate::ai::servers(agent).await)
+                }
+            }
+            .unwrap_or_default();
             let gone = |_| Error::new(ErrorCode::Unknown, "the phone closed the request");
             write_frame(send, &ToPhone::Head { status: 200 })
                 .await

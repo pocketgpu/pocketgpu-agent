@@ -71,6 +71,8 @@ pub enum Event {
     /// A device started looking at the screen (F45); the target is the display. Written once
     /// per device every 10 minutes, not for each look.
     ScreenLook,
+    /// A phone set up Ollama here (board 87): `started`, then `ok` or `failed`.
+    OllamaSetup,
     /// `pgpu screen on` or `off`, or someone here stopped a device looking.
     ScreenAccess,
 }
@@ -111,6 +113,7 @@ impl Event {
             Self::AppsAccess => "apps_access",
             Self::Invite => "invite",
             Self::ScreenLook => "screen_look",
+            Self::OllamaSetup => "ollama_setup",
             Self::ScreenAccess => "screen_access",
         }
     }

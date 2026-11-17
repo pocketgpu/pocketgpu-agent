@@ -33,6 +33,30 @@ pub struct ServedModel {
     pub context: Option<u32>,
 }
 
+/// Setting up Ollama from a phone (board 87.2), as the agent reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaSetup {
+    pub phase: SetupPhase,
+    /// Bytes downloaded, of `total` (0 until the size is known).
+    pub done: u64,
+    pub total: u64,
+    /// Why it stopped, in `Failed`.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupPhase {
+    /// Not asked for since the agent started.
+    #[default]
+    Idle,
+    Download,
+    Unpack,
+    Start,
+    Ready,
+    Failed,
+}
+
 /// What to call the server on `port`: what its models say about it (`owned_by`), else the
 /// one usually found on that port.
 pub fn name_for(port: u16, owned_by: Option<&str>) -> Option<&'static str> {

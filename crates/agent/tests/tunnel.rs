@@ -22,7 +22,9 @@ async fn fake_ollama() -> String {
                 let mut buf = vec![0u8; 8192];
                 let n = s.read(&mut buf).await.unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                let body = if req.starts_with("GET /api/tags") {
+                let body = if req.starts_with("GET /api/version") {
+                    r#"{"version":"0.40.16"}"#.to_string()
+                } else if req.starts_with("GET /api/tags") {
                     r#"{"models":[{"name":"qwen3:14b","size":9000000000}]}"#.to_string()
                 } else if req.starts_with("POST /api/pull") {
                     (1..=3)
@@ -204,4 +206,31 @@ async fn phones_chat_with_another_model_server_on_its_port_only() {
         code(c.server(other, Method::Get, "/v1/models", vec![]).await),
         ErrorCode::Invalid
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_full_control_sets_up_ollama() {
+    use pocketgpu_proto::ai::SetupPhase;
+    let h = Harness::start().await;
+    // Ollama answers already, so the setup finds it there and downloads nothing.
+    h.agent.config.write().unwrap().ollama_addr = fake_ollama().await;
+
+    let controller = h.phone(Some(Permission::Control)).await;
+    let c = h.connect(&controller).await.unwrap();
+    assert_eq!(c.ollama_setup(false).await.unwrap().phase, SetupPhase::Idle);
+    assert_eq!(code(c.ollama_setup(true).await), ErrorCode::Forbidden);
+
+    let owner = h.phone(Some(Permission::Shell)).await;
+    let o = h.connect(&owner).await.unwrap();
+    o.ollama_setup(true).await.unwrap();
+    let mut phase = SetupPhase::Download;
+    for _ in 0..50 {
+        phase = o.ollama_setup(false).await.unwrap().phase;
+        if phase == SetupPhase::Ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(phase, SetupPhase::Ready);
+    assert_eq!(h.audit_events("ollama_setup"), 2);
 }

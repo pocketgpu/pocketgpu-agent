@@ -37,6 +37,9 @@ pub enum ToAgent {
     },
     /// The model servers on the machine and their models: `ai::ModelServer`s as JSON. View.
     Servers,
+    /// Sets up Ollama on the machine as its user (`start`, Shell), or asks how far it is
+    /// (View): `ai::OllamaSetup` as JSON (board 87).
+    SetUpOllama { start: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

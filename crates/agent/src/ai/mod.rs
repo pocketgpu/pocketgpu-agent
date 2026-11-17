@@ -3,6 +3,8 @@
 //! at once and briefly; phones chat with them through the tunnel (tunnel/mod.rs), and only on
 //! these ports.
 
+pub mod setup;
+
 use std::sync::Arc;
 use std::time::Duration;
 

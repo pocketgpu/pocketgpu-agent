@@ -51,6 +51,8 @@ pub enum Kind {
     GuestEnded,
     /// A device started looking at the screen (F45).
     ScreenLook,
+    /// A device started setting up Ollama here (board 87).
+    OllamaSetup,
 }
 
 impl Kind {
@@ -66,6 +68,7 @@ impl Kind {
                 | Self::AppOpen
                 | Self::GuestEnded
                 | Self::ScreenLook
+                | Self::OllamaSetup
         )
     }
 
@@ -73,7 +76,7 @@ impl Kind {
     pub fn alone(self) -> bool {
         matches!(
             self,
-            Self::Pair | Self::Terminal | Self::Power | Self::ScreenLook
+            Self::Pair | Self::Terminal | Self::Power | Self::ScreenLook | Self::OllamaSetup
         )
     }
 
@@ -199,6 +202,7 @@ fn kind_of(event: Event, result: &str) -> Option<Kind> {
         Event::ClipGet if result == "ok" => Kind::ClipRead,
         Event::AppOpen if result == "ok" => Kind::AppOpen,
         Event::ScreenLook if result == "ok" => Kind::ScreenLook,
+        Event::OllamaSetup if result == "started" => Kind::OllamaSetup,
         _ => return None,
     })
 }
