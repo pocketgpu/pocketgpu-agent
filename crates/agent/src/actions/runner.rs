@@ -1,5 +1,8 @@
 //! Runs an action through the user's shell, as the agent user, with a timeout and capped
 //! output. The command gets its own process group so a timeout stops everything it started.
+//! The shell starts as a login shell, so a command finds the programs it finds in the user's
+//! terminal (Homebrew puts its folder on the path in `~/.zprofile`), not only the bare path the
+//! agent's service starts with.
 
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -43,9 +46,38 @@ pub async fn run(action: &Action) -> Result<Outcome> {
     run_with(action, Duration::from_secs(u64::from(action.timeout_s))).await
 }
 
+/// The flags before the command: a login shell (`-l`), which reads the user's profile. csh and
+/// tcsh take `-l` only on its own, so they get `-c` alone.
+#[cfg(not(windows))]
+fn shell_flags(shell: &str) -> &'static [&'static str] {
+    let name = shell.rsplit('/').next().unwrap_or(shell);
+    if name.ends_with("csh") {
+        &["-c"]
+    } else {
+        &["-l", "-c"]
+    }
+}
+
+/// Homebrew's folders after the path the agent has, for a profile that doesn't add them (they
+/// are where `ollama`, `python3` and the like live on a Mac).
+#[cfg(target_os = "macos")]
+const TOOL_DIRS: &[&str] = &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
+
+#[cfg(target_os = "macos")]
+fn with_tool_dirs(path: &str) -> String {
+    let mut parts: Vec<&str> = path.split(':').filter(|p| !p.is_empty()).collect();
+    for dir in TOOL_DIRS {
+        if !parts.contains(dir) {
+            parts.push(dir);
+        }
+    }
+    parts.join(":")
+}
+
 async fn run_with(action: &Action, timeout: Duration) -> Result<Outcome> {
     let started = Instant::now();
-    let mut cmd = Command::new(shell());
+    let program = shell();
+    let mut cmd = Command::new(&program);
     #[cfg(windows)]
     {
         // No console window for the action; PowerShell runs the command as typed.
@@ -53,7 +85,12 @@ async fn run_with(action: &Action, timeout: Duration) -> Result<Outcome> {
             .args(["-NoProfile", "-NonInteractive", "-Command"]);
     }
     #[cfg(not(windows))]
-    cmd.arg("-c");
+    cmd.args(shell_flags(&program));
+    #[cfg(target_os = "macos")]
+    cmd.env(
+        "PATH",
+        with_tool_dirs(&std::env::var("PATH").unwrap_or_default()),
+    );
     cmd.arg(&action.command)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -69,7 +106,7 @@ async fn run_with(action: &Action, timeout: Duration) -> Result<Outcome> {
     cmd.process_group(0);
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("could not start {}", shell()))?;
+        .with_context(|| format!("could not start {program}"))?;
 
     let buf = Arc::new(Mutex::new(Tail::default()));
     let readers = [
@@ -204,6 +241,33 @@ mod tests {
     /// The same command for sh (Linux) and PowerShell (Windows).
     fn shell(unix: &str, windows: &str) -> String {
         (if cfg!(windows) { windows } else { unix }).to_string()
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn starts_a_login_shell_except_csh() {
+        assert_eq!(shell_flags("/bin/zsh"), ["-l", "-c"]);
+        assert_eq!(shell_flags("/usr/local/bin/fish"), ["-l", "-c"]);
+        assert_eq!(shell_flags("/bin/sh"), ["-l", "-c"]);
+        assert_eq!(shell_flags("/bin/tcsh"), ["-c"]);
+        assert_eq!(shell_flags("csh"), ["-c"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn adds_homebrew_after_the_path() {
+        assert_eq!(
+            with_tool_dirs("/usr/bin:/bin"),
+            "/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
+        );
+        assert_eq!(
+            with_tool_dirs("/opt/homebrew/bin:/usr/bin"),
+            "/opt/homebrew/bin:/usr/bin:/opt/homebrew/sbin:/usr/local/bin"
+        );
+        assert_eq!(
+            with_tool_dirs(""),
+            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
+        );
     }
 
     #[tokio::test]
