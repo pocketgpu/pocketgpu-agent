@@ -65,10 +65,16 @@ impl Agent {
         let paths = Paths::under(dir);
         paths.create_all()?;
         let identity = Identity::load_or_create(&paths.key_file())?;
+        // Its own Inbox: the real one is in Downloads, which macOS keeps tests waiting on
+        // until someone answers its privacy prompt.
+        let config = Config {
+            files_inbox: Some(paths.data_dir.join("inbox")),
+            ..Config::default()
+        };
         Ok(Self::assemble(
             paths,
             identity,
-            Config::default(),
+            config,
             db::open_in_memory()?,
             gpus,
         ))

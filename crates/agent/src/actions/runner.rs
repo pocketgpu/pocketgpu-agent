@@ -290,7 +290,8 @@ mod tests {
                 "echo started; sleep 30",
                 "echo started; Start-Sleep 30",
             )),
-            Duration::from_millis(300),
+            // Room for a login shell to start on a slow machine before it's stopped.
+            Duration::from_secs(2),
         )
         .await
         .unwrap();
