@@ -1,6 +1,7 @@
 //! PocketGPU agent: the daemon that serves phones, and the `pgpu` command line.
 
 pub mod actions;
+pub mod ai;
 pub mod alerts;
 pub mod apps;
 pub mod audit;

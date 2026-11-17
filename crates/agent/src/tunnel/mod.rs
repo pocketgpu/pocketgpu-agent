@@ -1,15 +1,17 @@
-//! `pgpu/tunnel/1`: forwards allowed requests to Ollama on this machine (F17, F18).
+//! `pgpu/tunnel/1`: forwards allowed requests to Ollama or another model server on this
+//! machine (F17, F18).
 //!
 //! Each stream carries one request. The path must be on the allowlist in
-//! `pocketgpu_proto::tunnel::permission_for` and the phone needs the permission it names.
+//! `pocketgpu_proto::tunnel::permission_for` (Ollama) or `server_permission_for` (the others,
+//! on their known or added ports only: ai/mod.rs) and the phone needs the permission it names.
 //! Pulls and deletes are audited with the model name; prompts and replies never are.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, SendStream};
-use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone, permission_for};
-use pocketgpu_proto::{Error, ErrorCode, read_frame, write_frame};
+use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone, permission_for, server_permission_for};
+use pocketgpu_proto::{Error, ErrorCode, Permission, read_frame, write_frame};
 
 use crate::audit::{self, Event as Audit};
 use crate::daemon::auth::{Peer, PeerProtocol};
@@ -25,7 +27,7 @@ impl PeerProtocol for Tunnel {
     async fn serve(&self, agent: Arc<Agent>, peer: Peer, conn: Connection) -> anyhow::Result<()> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
-            // Only ever this machine's own Ollama: no proxy, and no redirect elsewhere.
+            // Only ever this machine's own servers: no proxy, and no redirect elsewhere.
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
@@ -52,14 +54,80 @@ async fn forward(
     request: ToAgent,
     send: &mut SendStream,
 ) -> Result<(), Error> {
-    let ToAgent::Request { method, path, body } = request;
-    let path = path.as_str();
-    let needed = permission_for(method, path).ok_or_else(|| {
-        Error::new(
-            ErrorCode::Invalid,
-            format!("PocketGPU doesn't forward {method:?} {path}"),
-        )
-    })?;
+    match request {
+        ToAgent::Request { method, path, body } => {
+            let call = Call {
+                method,
+                path: &path,
+                body,
+            };
+            ollama(agent, peer, http, call, send).await
+        }
+        ToAgent::Server {
+            port,
+            method,
+            path,
+            body,
+        } => {
+            let needed =
+                server_permission_for(method, &path).ok_or_else(|| refused(method, &path))?;
+            let name = crate::ai::name(agent, port);
+            agent.require(peer, needed, &format!("{name} {path}"))?;
+            if !crate::ai::allowed(agent, port) {
+                return Err(Error::new(
+                    ErrorCode::Invalid,
+                    format!(
+                        "PocketGPU doesn't talk to port {port}; add it at the computer with: pgpu ai add {port}"
+                    ),
+                ));
+            }
+            let base = format!("http://127.0.0.1:{port}");
+            let call = Call {
+                method,
+                path: &path,
+                body,
+            };
+            pipe(http, &base, call, send, &name).await
+        }
+        ToAgent::Servers => {
+            agent.require(peer, Permission::View, "model servers")?;
+            let list = crate::ai::servers(agent).await;
+            let json = serde_json::to_vec(&list).unwrap_or_default();
+            let gone = |_| Error::new(ErrorCode::Unknown, "the phone closed the request");
+            write_frame(send, &ToPhone::Head { status: 200 })
+                .await
+                .map_err(gone)?;
+            write_frame(send, &ToPhone::Chunk(json))
+                .await
+                .map_err(gone)?;
+            write_frame(send, &ToPhone::End).await.map_err(gone)
+        }
+    }
+}
+
+/// What the phone asked a server for.
+struct Call<'a> {
+    method: Method,
+    path: &'a str,
+    body: Vec<u8>,
+}
+
+fn refused(method: Method, path: &str) -> Error {
+    Error::new(
+        ErrorCode::Invalid,
+        format!("PocketGPU doesn't forward {method:?} {path}"),
+    )
+}
+
+async fn ollama(
+    agent: &Agent,
+    peer: &Peer,
+    http: &reqwest::Client,
+    call: Call<'_>,
+    send: &mut SendStream,
+) -> Result<(), Error> {
+    let (method, path) = (call.method, call.path);
+    let needed = permission_for(method, path).ok_or_else(|| refused(method, path))?;
     agent.require(peer, needed, &format!("Ollama {path}"))?;
     let audited = match (method, path) {
         (Method::Post, "/api/pull") => Some(Audit::ModelPull),
@@ -67,7 +135,7 @@ async fn forward(
         _ => None,
     };
     if let Some(event) = audited {
-        let model = model_name(&body);
+        let model = model_name(&call.body);
         let _ = audit::record(
             &agent.db(),
             &peer.key.to_string(),
@@ -76,13 +144,24 @@ async fn forward(
             "requested",
         );
     }
-
     let base = agent
         .config
         .read()
         .expect("config lock poisoned")
         .ollama_addr
         .clone();
+    pipe(http, &base, call, send, "Ollama").await
+}
+
+/// Sends the request to the server at `base` and streams its answer back to the phone.
+async fn pipe(
+    http: &reqwest::Client,
+    base: &str,
+    call: Call<'_>,
+    send: &mut SendStream,
+    name: &str,
+) -> Result<(), Error> {
+    let Call { method, path, body } = call;
     let url = format!("{}{path}", base.trim_end_matches('/'));
     let req = match method {
         Method::Get => http.get(&url),
@@ -96,9 +175,9 @@ async fn forward(
     };
     let mut res = req.send().await.map_err(|e| {
         let msg = if e.is_connect() || e.is_timeout() {
-            format!("Ollama isn't running on this machine (nothing answers at {base})")
+            format!("{name} isn't running on this machine (nothing answers at {base})")
         } else {
-            format!("could not reach Ollama: {e}")
+            format!("could not reach {name}: {e}")
         };
         Error::new(ErrorCode::NotFound, msg)
     })?;
@@ -116,7 +195,7 @@ async fn forward(
         match res.chunk().await {
             Ok(Some(bytes)) => {
                 for part in bytes.chunks(CHUNK) {
-                    // A closed stream ends here, which drops the request to Ollama.
+                    // A closed stream ends here, which drops the request to the server.
                     write_frame(send, &ToPhone::Chunk(part.to_vec()))
                         .await
                         .map_err(gone)?;
@@ -126,7 +205,7 @@ async fn forward(
             Err(e) => {
                 return Err(Error::new(
                     ErrorCode::Internal,
-                    format!("Ollama stopped answering: {e}"),
+                    format!("{name} stopped answering: {e}"),
                 ));
             }
         }

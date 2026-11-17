@@ -102,6 +102,15 @@ where
                 }
                 continue;
             }
+            Request::GetModelServers
+            | Request::AddModelServer { .. }
+            | Request::RemoveModelServer { .. } => {
+                let reply = crate::ai::local_request(&agent, req).await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::GetScreen | Request::SetScreen { .. } | Request::StopScreen { .. } => {
                 let reply = crate::screen::local_request(&agent, req).await;
                 if write_frame(&mut w, &reply).await.is_err() {
@@ -349,8 +358,12 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         | Request::SetAppOff { .. }
         | Request::GetScreen
         | Request::SetScreen { .. }
-        | Request::StopScreen { .. } => Response::Error(
-            "files, clipboard, apps and screen requests run on the stream handler".into(),
+        | Request::StopScreen { .. }
+        | Request::GetModelServers
+        | Request::AddModelServer { .. }
+        | Request::RemoveModelServer { .. } => Response::Error(
+            "files, clipboard, apps, screen and model server requests run on the stream handler"
+                .into(),
         ),
     }
 }

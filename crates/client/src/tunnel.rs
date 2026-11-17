@@ -1,6 +1,8 @@
-//! `pgpu/tunnel/1` from the phone: a request to the machine's Ollama (F17, F18).
+//! `pgpu/tunnel/1` from the phone: a request to the machine's Ollama or another model server
+//! on it (F17, F18).
 
 use iroh::endpoint::{Connection, RecvStream};
+use pocketgpu_proto::ai::ModelServer;
 use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone};
 use pocketgpu_proto::{alpn, read_frame, write_frame};
 
@@ -18,16 +20,46 @@ impl Machine {
         path: &str,
         body: Vec<u8>,
     ) -> Result<OllamaReply, ClientError> {
+        self.tunnel(ToAgent::Request {
+            method,
+            path: path.into(),
+            body,
+        })
+        .await
+    }
+
+    /// Sends one request to another model server on the machine, by its port (`ModelServer`):
+    /// its model list or a chat. Dropping the reply stops the chat.
+    pub async fn server(
+        &self,
+        port: u16,
+        method: Method,
+        path: &str,
+        body: Vec<u8>,
+    ) -> Result<OllamaReply, ClientError> {
+        self.tunnel(ToAgent::Server {
+            port,
+            method,
+            path: path.into(),
+            body,
+        })
+        .await
+    }
+
+    /// The model servers on the machine besides Ollama. An agent too old to know them closes
+    /// the stream (`ClientError::NoReply`).
+    pub async fn servers(&self) -> Result<Vec<ModelServer>, ClientError> {
+        let bytes = self.tunnel(ToAgent::Servers).await?.body().await?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::Connection(format!("model servers: {e}")))
+    }
+
+    async fn tunnel(&self, req: ToAgent) -> Result<OllamaReply, ClientError> {
         let conn = self.client.dial(self.addr.clone(), alpn::TUNNEL).await?;
         let (mut send, mut recv) = conn
             .open_bi()
             .await
             .map_err(|e| ClientError::Connection(e.to_string()))?;
-        let req = ToAgent::Request {
-            method,
-            path: path.into(),
-            body,
-        };
         write_frame(&mut send, &req).await?;
         let _ = send.finish();
         match read_frame::<_, ToPhone>(&mut recv).await? {
@@ -43,7 +75,7 @@ impl Machine {
 }
 
 pub struct OllamaReply {
-    /// Ollama's HTTP status.
+    /// The server's HTTP status.
     pub status: u16,
     recv: RecvStream,
     _conn: Connection,

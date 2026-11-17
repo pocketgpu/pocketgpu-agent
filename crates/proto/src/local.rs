@@ -210,6 +210,18 @@ pub enum Request {
     StopScreen {
         device: Option<String>,
     },
+    /// The model servers here besides Ollama, and their models (F18). Replies `ModelServers`.
+    GetModelServers,
+    /// Looks for a model server on this port too, with this name (`pgpu ai add`). Replies
+    /// `ModelServers`.
+    AddModelServer {
+        port: u16,
+        name: Option<String>,
+    },
+    /// Stops looking on a port added with `AddModelServer`. Replies `ModelServers`.
+    RemoveModelServer {
+        port: u16,
+    },
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -404,6 +416,7 @@ pub enum Response {
     ClipText(Option<String>),
     Apps(crate::apps::Apps),
     Screen(ScreenStatus),
+    ModelServers(Vec<crate::ai::ModelServer>),
 }
 
 /// The screen for other devices (F45), as `pgpu screen` and This PC show it.

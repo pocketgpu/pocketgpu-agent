@@ -1,4 +1,4 @@
-//! F17/F18: requests to Ollama through `pgpu/tunnel/1`, against a fake Ollama.
+//! F17/F18: requests to Ollama and other model servers through `pgpu/tunnel/1`, against fakes.
 
 mod harness;
 
@@ -109,4 +109,99 @@ async fn a_machine_without_ollama_says_so() {
         Ok(_) => panic!("expected an error"),
         Err(e) => panic!("expected a remote error, got {e}"),
     }
+}
+
+/// A tiny OpenAI-style server: `/v1/models` lists one model, `/v1/chat/completions` streams two
+/// pieces and `[DONE]`.
+async fn fake_openai() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let (kind, body) = if req.starts_with("GET /v1/models") {
+                    (
+                        "application/json",
+                        r#"{"data":[{"id":"tiny","owned_by":"llamacpp"}]}"#.to_string(),
+                    )
+                } else {
+                    (
+                        "text/event-stream",
+                        [
+                            r#"{"choices":[{"delta":{"content":"Hi"}}]}"#,
+                            r#"{"choices":[{"delta":{"content":"!"}}]}"#,
+                            "[DONE]",
+                        ]
+                        .iter()
+                        .map(|d| format!("data: {d}\n\n"))
+                        .collect(),
+                    )
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes()).await;
+                let _ = s.write_all(body.as_bytes()).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn phones_chat_with_another_model_server_on_its_port_only() {
+    let h = Harness::start().await;
+    let port = fake_openai().await;
+    h.agent.config.write().unwrap().ai_added = vec![pocketgpu::store::config::AddedApp {
+        port,
+        name: Some("Mine".into()),
+    }];
+    let chat = br#"{"model":"tiny","messages":[],"stream":true}"#.to_vec();
+
+    let viewer = h.phone(Some(Permission::View)).await;
+    let v = h.connect(&viewer).await.unwrap();
+    let servers = v.servers().await.unwrap();
+    let mine = servers.iter().find(|s| s.port == port).unwrap();
+    assert!(mine.up && mine.added, "{mine:?}");
+    assert_eq!(mine.name, "Mine");
+    assert_eq!(mine.models[0].id, "tiny");
+    assert_eq!(
+        code(
+            v.server(port, Method::Post, "/v1/chat/completions", chat.clone())
+                .await
+        ),
+        ErrorCode::Forbidden
+    );
+
+    let controller = h.phone(Some(Permission::Control)).await;
+    let c = h.connect(&controller).await.unwrap();
+    let reply = c
+        .server(port, Method::Post, "/v1/chat/completions", chat.clone())
+        .await
+        .unwrap();
+    let body = String::from_utf8(reply.body().await.unwrap()).unwrap();
+    assert!(
+        body.contains("\"Hi\"") && body.ends_with("data: [DONE]\n\n"),
+        "{body}"
+    );
+    assert_eq!(
+        code(
+            c.server(port, Method::Post, "/v1/completions", chat.clone())
+                .await
+        ),
+        ErrorCode::Invalid
+    );
+    // A port nobody added isn't reached, whatever answers there.
+    let other = fake_openai().await;
+    assert_eq!(
+        code(c.server(other, Method::Get, "/v1/models", vec![]).await),
+        ErrorCode::Invalid
+    );
 }

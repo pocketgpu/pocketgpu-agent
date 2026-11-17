@@ -45,9 +45,11 @@ pub struct Config {
     /// A live picture of this screen for devices with Full control (F45). Off until
     /// `pgpu screen on` here.
     pub screen: bool,
+    /// Model servers besides Ollama on other ports, added with `pgpu ai add` (F18).
+    pub ai_added: Vec<AddedApp>,
 }
 
-/// A port added with `pgpu apps add`.
+/// A port added with `pgpu apps add` or `pgpu ai add`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddedApp {
     pub port: u16,
@@ -92,6 +94,7 @@ impl Default for Config {
             apps_added: Vec::new(),
             apps_off: Vec::new(),
             screen: false,
+            ai_added: Vec::new(),
         }
     }
 }
