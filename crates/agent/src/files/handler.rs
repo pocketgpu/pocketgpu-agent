@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use pocketgpu_proto::files::{
@@ -92,8 +93,12 @@ async fn handle(
         Request::Overview => {
             let permission = agent.permission_of(&peer.key);
             let agent = agent.clone();
+            // Counting a folder can wait on the system (macOS asking to allow Documents):
+            // the folders are counted first, each for a moment at most, then the rest is built.
+            let counts = count_folders(&agent).await;
             let built =
-                tokio::task::spawn_blocking(move || overview(&agent, &device, permission)).await;
+                tokio::task::spawn_blocking(move || overview(&agent, &device, permission, counts))
+                    .await;
             Some(match built {
                 Ok(o) => Response::Overview(o),
                 Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
@@ -151,7 +156,42 @@ fn off_overview(agent: &Agent) -> Overview {
     }
 }
 
-fn overview(agent: &Agent, device: &str, permission: Option<Permission>) -> Overview {
+/// How long a folder may take to open before the overview goes without its count.
+const COUNT_WAIT: Duration = Duration::from_secs(2);
+
+/// The file counts of the shared folders (in order) and the Inbox; 0 for one that didn't open
+/// in time.
+struct Counts {
+    shared: Vec<u32>,
+    inbox: u32,
+}
+
+async fn count_folders(agent: &Agent) -> Counts {
+    let shared = agent
+        .config
+        .read()
+        .expect("config lock poisoned")
+        .files_shared
+        .clone();
+    let mut counted = Vec::with_capacity(shared.len());
+    for p in shared {
+        counted.push(super::count_files_within(p, COUNT_WAIT).await.unwrap_or(0));
+    }
+    let inbox = super::count_files_within(super::inbox_dir(agent), COUNT_WAIT)
+        .await
+        .unwrap_or(0);
+    Counts {
+        shared: counted,
+        inbox,
+    }
+}
+
+fn overview(
+    agent: &Agent,
+    device: &str,
+    permission: Option<Permission>,
+    counts: Counts,
+) -> Overview {
     let shared = agent
         .config
         .read()
@@ -160,12 +200,13 @@ fn overview(agent: &Agent, device: &str, permission: Option<Permission>) -> Over
         .clone();
     let shared = shared
         .iter()
-        .map(|p| Folder {
+        .enumerate()
+        .map(|(i, p)| Folder {
             name: p
                 .file_name()
                 .map_or_else(|| super::shown(p), |n| n.to_string_lossy().into_owned()),
             path: super::shown(p),
-            files: super::count_files(p),
+            files: counts.shared.get(i).copied().unwrap_or(0),
         })
         .collect();
     let inbox = super::inbox_dir(agent);
@@ -186,7 +227,7 @@ fn overview(agent: &Agent, device: &str, permission: Option<Permission>) -> Over
         enabled: true,
         shared,
         inbox: super::shown(&inbox),
-        inbox_files: super::count_files(&inbox),
+        inbox_files: counts.inbox,
         job_logs: browse::job_logs(&agent.paths.jobs_dir()).len() as u32,
         offers,
         home: permission == Some(Permission::Shell) && super::terminal_on(agent).is_ok(),

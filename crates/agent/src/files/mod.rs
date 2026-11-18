@@ -134,6 +134,38 @@ pub fn count_files(dir: &Path) -> u32 {
     })
 }
 
+/// Folders whose file count is still being read. On a Mac, opening Documents, Downloads or
+/// Desktop waits for the person to allow it (a dialog that may sit unseen on the screen), and a
+/// plain read would wait with it, once more for every request. A folder in this set is skipped
+/// until its read comes back.
+static COUNTING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// [`count_files`] that gives up after `wait`: `None` while the folder won't open yet (macOS
+/// asking for permission, a network drive that doesn't answer), so a request for the overview
+/// still answers with everything else. The read carries on in its own thread and, once it
+/// comes back, later requests count normally.
+pub async fn count_files_within(dir: PathBuf, wait: Duration) -> Option<u32> {
+    count_within(dir, wait, count_files).await
+}
+
+async fn count_within(
+    dir: PathBuf,
+    wait: Duration,
+    count: impl FnOnce(&Path) -> u32 + Send + 'static,
+) -> Option<u32> {
+    if !COUNTING.lock().expect("counting lock").insert(dir.clone()) {
+        return None;
+    }
+    let read = dir.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let n = count(&read);
+        COUNTING.lock().expect("counting lock").remove(&read);
+        n
+    });
+    tokio::time::timeout(wait, task).await.ok()?.ok()
+}
+
 /// At start and then hourly: unfinished sends older than a day and expired offers go.
 pub async fn tidy_hourly(agent: Arc<Agent>) {
     let mut tick = tokio::time::interval(Duration::from_secs(3600));
@@ -151,5 +183,44 @@ pub async fn tidy_hourly(agent: Arc<Agent>) {
         if let Err(e) = offers::prune(&agent.db(), crate::store::db::now_ms()) {
             tracing::warn!("could not remove expired offers: {e:#}");
         }
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn counts_a_folder_that_opens() {
+        let dir = PathBuf::from("/tmp/pgpu-count-ok");
+        let n = count_within(dir, Duration::from_secs(2), |_| 7).await;
+        assert_eq!(n, Some(7));
+    }
+
+    #[tokio::test]
+    async fn gives_up_on_a_folder_that_waits_and_does_not_pile_up_reads() {
+        let dir = PathBuf::from("/tmp/pgpu-count-slow");
+        let slow = |_: &Path| {
+            std::thread::sleep(Duration::from_millis(400));
+            3
+        };
+        // The first read waits longer than we do.
+        assert_eq!(
+            count_within(dir.clone(), Duration::from_millis(50), slow).await,
+            None
+        );
+        // Asked again while it is still waiting: no second read starts.
+        let started = std::time::Instant::now();
+        assert_eq!(
+            count_within(dir.clone(), Duration::from_secs(2), |_| 99).await,
+            None
+        );
+        assert!(started.elapsed() < Duration::from_millis(100));
+        // Once the first read is over, counting works again.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            count_within(dir, Duration::from_secs(2), |_| 5).await,
+            Some(5)
+        );
     }
 }
