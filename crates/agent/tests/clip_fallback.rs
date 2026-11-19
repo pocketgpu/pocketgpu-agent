@@ -4,6 +4,7 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "it/harness/mod.rs"]
 mod harness;
 
 use harness::Harness;

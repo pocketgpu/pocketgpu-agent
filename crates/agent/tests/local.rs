@@ -1,6 +1,7 @@
 //! The tray app's local client finds and talks to the agent like the command line does.
 #![cfg(unix)]
 
+#[path = "it/harness/mod.rs"]
 mod harness;
 
 use harness::Harness;
