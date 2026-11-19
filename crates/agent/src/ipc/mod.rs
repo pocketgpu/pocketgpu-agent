@@ -215,6 +215,11 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
                 Err(e) => Response::Error(e),
             }
         }
+        Request::GetLan => Response::Lan(crate::lan::status(agent)),
+        Request::SetLan { on } => match crate::lan::set(agent, on) {
+            Ok(()) => Response::Lan(crate::lan::status(agent)),
+            Err(e) => Response::Error(format!("{e:#}")),
+        },
         Request::GetPower => Response::Power(crate::power::state(agent)),
         Request::SetPower { on } => match crate::power::set_enabled(agent, on) {
             Ok(()) => Response::Power(crate::power::state(agent)),

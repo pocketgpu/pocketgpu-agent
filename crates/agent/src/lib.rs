@@ -15,6 +15,7 @@ pub mod files;
 pub mod games;
 pub mod ipc;
 pub mod jobs;
+pub mod lan;
 #[cfg(target_os = "macos")]
 pub mod macsys;
 pub mod notices;

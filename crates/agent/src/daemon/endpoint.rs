@@ -91,6 +91,10 @@ pub fn serve(agent: Arc<Agent>, endpoint: Endpoint) -> Router {
             alpn::PAIR,
             PairHandler::new(agent.clone(), agent.identity.agent_id()),
         )
+        .accept(
+            alpn::PAIR_LAN,
+            crate::lan::pair::LanPairHandler::new(agent.clone()),
+        )
         .accept(alpn::CONTROL, Paired::new(agent.clone(), Control))
         .accept(alpn::METRICS, Paired::new(agent.clone(), Metrics))
         .accept(

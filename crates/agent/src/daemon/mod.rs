@@ -74,6 +74,10 @@ pub async fn run(paths: Paths) -> Result<()> {
         crate::jobs::RESUME_WITHIN,
     ));
     let router = endpoint::serve(agent.clone(), endpoint);
+    let lan = tokio::spawn(crate::lan::announce(
+        agent.clone(),
+        router.endpoint().bound_sockets(),
+    ));
     let vram = tokio::spawn(crate::jobs::track_vram(agent.clone()));
     let prune = tokio::spawn(crate::jobs::prune_hourly(agent.clone()));
     let files = tokio::spawn(crate::files::tidy_hourly(agent.clone()));
@@ -117,6 +121,7 @@ pub async fn run(paths: Paths) -> Result<()> {
     alerts.abort();
     heartbeat.abort();
     rules.abort();
+    lan.abort();
     crate::alerts::heartbeat::ended(&agent).await;
     // Connected phones show "ended" rather than "offline".
     agent.close_all(pocketgpu_proto::ENDED_REASON);

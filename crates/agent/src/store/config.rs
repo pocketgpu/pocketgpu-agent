@@ -49,6 +49,9 @@ pub struct Config {
     pub ai_added: Vec<AddedApp>,
     /// Ollama that a phone set up on Linux, in PocketGPU's folder: the agent starts it (board 87).
     pub ollama_managed: bool,
+    /// Being found on the same Wi-Fi (F47): the record phones look for, and pairing from
+    /// the Wi-Fi while `pgpu pair` runs. On unless `pgpu lan off` here.
+    pub lan: bool,
 }
 
 /// A port added with `pgpu apps add` or `pgpu ai add`.
@@ -98,6 +101,7 @@ impl Default for Config {
             screen: false,
             ai_added: Vec::new(),
             ollama_managed: false,
+            lan: true,
         }
     }
 }

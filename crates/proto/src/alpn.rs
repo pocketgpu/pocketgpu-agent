@@ -2,6 +2,10 @@
 
 /// Pairing. The only protocol open to unknown keys, and only while a pairing code is active.
 pub const PAIR: &[u8] = b"pgpu/pair/1";
+/// Pairing a computer found on the same Wi-Fi (F47): no secret, so open only while a pairing
+/// session runs, only on a direct private path, and only with a yes at the computer
+/// (`specs/F47-find-on-wifi/contracts/lan.md` §2).
+pub const PAIR_LAN: &[u8] = b"pgpu/pair-lan/1";
 /// Request and reply: machine info, processes, actions, alert settings.
 pub const CONTROL: &[u8] = b"pgpu/control/1";
 /// One stream per app session with a sample every second.
@@ -32,6 +36,7 @@ pub const APPS: &[u8] = b"pgpu/apps/1";
 pub const SCREEN: &[u8] = b"pgpu/screen/1";
 
 /// Every protocol the agent serves.
-pub const ALL: [&[u8]; 12] = [
+pub const ALL: [&[u8]; 13] = [
     PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP, APPS, SCREEN,
+    PAIR_LAN,
 ];

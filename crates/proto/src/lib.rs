@@ -8,6 +8,7 @@ pub mod crash;
 pub mod docker;
 pub mod files;
 pub mod frame;
+pub mod lan;
 pub mod local;
 pub mod msg;
 pub mod pairing;

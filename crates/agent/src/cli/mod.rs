@@ -19,6 +19,7 @@ pub mod doctor;
 pub mod files;
 pub mod inbox;
 pub mod jobs;
+pub mod lan;
 pub mod mcp;
 pub mod notices;
 pub mod notify;
@@ -160,6 +161,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<ai::Action>,
     },
+    /// Being found by phones on the same Wi-Fi: status, on or off.
+    Lan {
+        #[command(subcommand)]
+        action: Option<lan::Action>,
+    },
     /// A live picture of this screen for your devices with Full control: status, on, off, stop.
     Screen {
         #[command(subcommand)]
@@ -299,6 +305,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Send { file, to } => send::run(&paths, cli.json, file, to.clone()).await,
         Command::Apps { action } => apps::run(&paths, cli.json, action.clone()).await,
         Command::Ai { action } => ai::run(&paths, cli.json, action.clone()).await,
+        Command::Lan { action } => lan::run(&paths, cli.json, action.clone()).await,
         Command::Screen { action } => screen::run(&paths, cli.json, action.clone()).await,
         Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,

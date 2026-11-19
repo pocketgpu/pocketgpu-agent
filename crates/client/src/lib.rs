@@ -9,6 +9,7 @@ mod docker;
 mod events;
 mod files;
 mod guests;
+pub mod lan;
 pub mod local;
 pub mod screen;
 mod shell;

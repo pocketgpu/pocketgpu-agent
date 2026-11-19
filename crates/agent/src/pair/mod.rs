@@ -35,6 +35,10 @@ pub struct Pairing {
     relays: OnceLock<Relays>,
     /// Invites made by devices with Shell (F44): pairing approved in advance.
     pub invites: invite::Invites,
+    /// Pairing from the same Wi-Fi (F47): one ask at a time, and the recent refusals.
+    pub lan: crate::lan::pair::Gate,
+    /// Whether a `pgpu pair` session waits for a phone: what the Wi-Fi record shows.
+    waiting: OnceLock<tokio::sync::watch::Sender<bool>>,
 }
 
 #[derive(Debug)]
@@ -52,6 +56,25 @@ impl Pairing {
     /// Remembers the relay setup of the main endpoint, for rendezvous endpoints.
     pub fn set_relays(&self, relays: Relays) {
         let _ = self.relays.set(relays);
+    }
+
+    fn waiting_tx(&self) -> &tokio::sync::watch::Sender<bool> {
+        self.waiting
+            .get_or_init(|| tokio::sync::watch::Sender::new(false))
+    }
+
+    /// Follows whether a session waits for a phone (F47).
+    pub fn watch_waiting(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.waiting_tx().subscribe()
+    }
+
+    /// Where a phone found on the Wi-Fi may ask, while a session waits and its code is still
+    /// unused (F47).
+    pub fn lan_asks(&self) -> Option<mpsc::Sender<Ask>> {
+        self.slot()
+            .as_ref()
+            .filter(|s| s.code.is_open(Instant::now()))
+            .map(|s| s.code.asks())
     }
 
     pub fn relays(&self) -> Relays {
@@ -101,6 +124,8 @@ impl Pairing {
             code,
             rendezvous: None,
         });
+        drop(slot);
+        self.waiting_tx().send_replace(true);
         Ok(())
     }
 
@@ -114,6 +139,8 @@ impl Pairing {
         let mut slot = self.slot();
         if slot.as_ref().is_some_and(|s| s.session == session) {
             *slot = None;
+            drop(slot);
+            self.waiting_tx().send_replace(false);
         }
     }
 }
@@ -227,6 +254,7 @@ async fn decide<W: AsyncWrite + Unpin>(
         device_name: clean_name(&ask.device_name),
         platform: ask.platform,
         device_fingerprint: pairing::key_groups(&device_id),
+        from_lan: ask.from_lan,
     };
     write_frame(w, &Response::PairAsk(question.clone())).await?;
 
@@ -276,7 +304,11 @@ async fn decide<W: AsyncWrite + Unpin>(
             &device_id,
             Event::Pair,
             &question.device_name,
-            permission.as_str(),
+            &if ask.from_lan {
+                format!("{} · on this Wi-Fi", permission.as_str())
+            } else {
+                permission.as_str().to_string()
+            },
         )?;
     }
     if ask.decision.send(Some(permission)).is_err() {

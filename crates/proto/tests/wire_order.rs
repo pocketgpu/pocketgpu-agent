@@ -387,7 +387,8 @@ fn clip_messages_keep_their_numbers() {
 #[test]
 fn new_protocols_come_last() {
     use pocketgpu_proto::alpn;
-    assert_eq!(alpn::ALL.len(), 12);
+    assert_eq!(alpn::ALL.len(), 13);
+    assert_eq!(alpn::ALL[12], alpn::PAIR_LAN);
     assert_eq!(alpn::ALL[11], alpn::SCREEN);
     assert_eq!(alpn::SCREEN, b"pgpu/screen/1");
     assert_eq!(alpn::ALL[8], alpn::FILES);
@@ -460,6 +461,12 @@ fn guest_messages_keep_their_numbers() {
     assert_eq!(tag(&r), 21);
     assert_eq!(tag(&Response::Guests(vec![])), 22);
     assert_eq!(tag(&Response::Answers(vec![])), 23);
+    assert_eq!(tag(&Request::GetLanKey), 30);
+    let k = Response::LanKey {
+        key: [0; 32],
+        on: true,
+    };
+    assert_eq!(tag(&k), 24);
 }
 
 #[test]

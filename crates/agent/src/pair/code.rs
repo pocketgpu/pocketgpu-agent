@@ -23,6 +23,8 @@ pub struct Ask {
     pub push_ticket: Option<String>,
     /// The permission to grant, or `None` to deny.
     pub decision: oneshot::Sender<Option<Permission>>,
+    /// Found on this Wi-Fi (F47) rather than proving a code.
+    pub from_lan: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -74,6 +76,11 @@ impl ActiveCode {
             tries: Vec::new(),
             asks,
         }
+    }
+
+    /// Where phones that want an answer from someone here wait (F47 uses it too).
+    pub fn asks(&self) -> mpsc::Sender<Ask> {
+        self.asks.clone()
     }
 
     /// Whether unknown keys may still try this code.

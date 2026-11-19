@@ -75,6 +75,8 @@ pub enum Event {
     OllamaSetup,
     /// `pgpu screen on` or `off`, or someone here stopped a device looking.
     ScreenAccess,
+    /// `pgpu lan on` or `off`: being found on the same Wi-Fi (F47).
+    LanAccess,
 }
 
 impl Event {
@@ -115,6 +117,7 @@ impl Event {
             Self::ScreenLook => "screen_look",
             Self::OllamaSetup => "ollama_setup",
             Self::ScreenAccess => "screen_access",
+            Self::LanAccess => "lan_access",
         }
     }
 }

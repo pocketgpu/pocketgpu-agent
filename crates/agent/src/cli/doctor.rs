@@ -53,6 +53,7 @@ pub async fn run(paths: &Paths, json: bool) -> Result<()> {
     let mut checks = vec![user(), agent(paths).await, gpu()];
     checks.extend(connection);
     checks.push(ollama);
+    checks.push(wifi(&config));
     checks.push(disk(&paths.data_dir));
     if json {
         println!("{}", serde_json::to_string_pretty(&checks)?);
@@ -287,6 +288,26 @@ async fn ollama(config: &Config) -> Check {
         None => Check::ok(
             "Ollama",
             format!("not running at {} (optional)", config.ollama_addr),
+        ),
+    }
+}
+
+/// Being found on the same Wi-Fi (F47). Optional: the code always works, so never a failure.
+fn wifi(config: &Config) -> Check {
+    if !config.lan {
+        return Check::ok(
+            "Wi-Fi",
+            "not shown on this network (turn on with: pgpu lan on)",
+        );
+    }
+    match mdns_sd::ServiceDaemon::new() {
+        Ok(d) => {
+            let _ = d.shutdown();
+            Check::ok("Wi-Fi", "phones here can find it while `pgpu pair` runs")
+        }
+        Err(e) => Check::ok(
+            "Wi-Fi",
+            format!("can't be found on this network ({e}); pairing with the code still works"),
         ),
     }
 }

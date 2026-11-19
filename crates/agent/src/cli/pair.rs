@@ -39,7 +39,9 @@ pub async fn run(paths: &Paths, json: bool, preset: Option<Permission>) -> Resul
                         if live && deadline.take().is_some() {
                             println!();
                         }
-                        let permission = match preset {
+                        // A phone found on the Wi-Fi had no code to prove: someone here always
+                        // decides, even with --permission (F47).
+                        let permission = match preset.filter(|_| !ask.from_lan) {
                             Some(p) => {
                                 eprintln!("Pairing {} as {}.", describe(&ask), p.as_str());
                                 Some(p)
@@ -150,9 +152,14 @@ fn menu(ask: &PairAsk, shell_on: Option<bool>, user: &str) -> String {
     } else {
         ""
     };
+    let from = if ask.from_lan {
+        " from this Wi-Fi, without a code"
+    } else {
+        ""
+    };
     format!(
         "  Phone key  {key}  (check it matches the phone's screen)\n\
-         \x20 \"{name}\" ({platform}) wants to connect. What can it do on this machine?\n\
+         \x20 \"{name}\" ({platform}) wants to connect{from}. What can it do on this machine?\n\
          \x20   v  View     see stats, jobs and alerts\n\
          \x20   c  Control  View, plus run quick actions, stop jobs and kill processes\n\
          \x20   s  Shell    Control, plus a terminal: it can run any command as {user}{shell_off}\n\
@@ -234,6 +241,7 @@ mod tests {
             device_name: "Pixel 9".into(),
             platform: Platform::Android,
             device_fingerprint: "a91c 40de 77b2 19aa".into(),
+            from_lan: false,
         };
         let menu = menu(&ask, Some(false), "kami");
         // The key comes before anything the phone named itself.
@@ -242,5 +250,13 @@ mod tests {
         assert!(menu.contains("any command as kami"));
         assert!(menu.contains("pgpu shell on"));
         assert!(!super::menu(&ask, Some(true), "kami").contains("pgpu shell on"));
+        let lan = PairAsk {
+            from_lan: true,
+            ..ask
+        };
+        assert!(
+            super::menu(&lan, Some(true), "kami")
+                .contains("wants to connect from this Wi-Fi, without a code")
+        );
     }
 }

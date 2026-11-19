@@ -30,6 +30,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 anyhow = "1"
 blake3 = "1.8"
+# Finding computers on the same Wi-Fi (F47): DNS-SD over mDNS, records we choose.
+mdns-sd = "0.22"
 
 # Smaller, faster-linking debug builds: file:line backtraces for our code, no debug info
 # for dependencies.

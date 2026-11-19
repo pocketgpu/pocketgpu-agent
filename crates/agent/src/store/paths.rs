@@ -66,6 +66,11 @@ impl Paths {
         self.data_dir.join("agent.key")
     }
 
+    /// The LAN key (F47): only paired devices get it, to recognise this computer on the Wi-Fi.
+    pub fn lan_key_file(&self) -> PathBuf {
+        self.data_dir.join("lan.key")
+    }
+
     pub fn db_file(&self) -> PathBuf {
         self.data_dir.join("pocketgpu.db")
     }

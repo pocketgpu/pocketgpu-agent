@@ -17,6 +17,10 @@ tracing.workspace = true
 blake3.workspace = true
 directories = "6"
 
+# The iPhone browses with Apple's Bonjour instead (F47, research R2).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+mdns-sd.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

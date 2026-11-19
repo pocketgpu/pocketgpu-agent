@@ -130,6 +130,7 @@ async fn serve(
             .push_ticket
             .filter(|t| t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit())),
         decision,
+        from_lan: false,
     };
     let reply = if asks.send(ask).await.is_err() {
         Response::Error(Error::new(

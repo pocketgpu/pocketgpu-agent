@@ -222,6 +222,12 @@ pub enum Request {
     RemoveModelServer {
         port: u16,
     },
+    /// Whether this computer can be found on the same Wi-Fi (F47). Replies `Lan`.
+    GetLan,
+    /// Turns being found on the Wi-Fi on or off (`pgpu lan on|off`). Replies `Lan`.
+    SetLan {
+        on: bool,
+    },
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -417,6 +423,16 @@ pub enum Response {
     Apps(crate::apps::Apps),
     Screen(ScreenStatus),
     ModelServers(Vec<crate::ai::ModelServer>),
+    Lan(LanStatus),
+}
+
+/// Being found on the same Wi-Fi (F47).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanStatus {
+    /// Shown on the Wi-Fi at all (`pgpu lan on`).
+    pub on: bool,
+    /// A `pgpu pair` session waits: the name shows, and phones there can ask to pair.
+    pub waiting: bool,
 }
 
 /// The screen for other devices (F45), as `pgpu screen` and This PC show it.
@@ -506,4 +522,6 @@ pub struct PairAsk {
     pub device_name: String,
     pub platform: Platform,
     pub device_fingerprint: String,
+    /// Found on this Wi-Fi (F47), not by a code: always asked, never approved in advance.
+    pub from_lan: bool,
 }

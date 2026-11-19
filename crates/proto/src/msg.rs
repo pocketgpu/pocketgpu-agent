@@ -280,6 +280,9 @@ pub mod control {
         LastAnswers {
             lines: u32,
         },
+        /// The computer's LAN key (F47), so this device can recognise it on the same Wi-Fi
+        /// without internet; replies `LanKey`. View. Agents before it answer with an error.
+        GetLanKey,
     }
 
     /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
@@ -408,6 +411,11 @@ pub mod control {
         },
         Guests(Vec<Guest>),
         Answers(Vec<LastAnswer>),
+        /// The answer to `GetLanKey`: the key, and whether finding on the Wi-Fi is on.
+        LanKey {
+            key: [u8; 32],
+            on: bool,
+        },
     }
 
     /// The answer to `CheckUpdate`.
@@ -473,6 +481,7 @@ pub mod control {
                 | Self::SetPushTicket { .. }
                 | Self::CheckUpdate
                 | Self::GetPower
+                | Self::GetLanKey
                 | Self::Unpair => Permission::View,
                 Self::ListProcesses
                 | Self::KillProcess { .. }
