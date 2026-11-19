@@ -8,7 +8,7 @@ use pocketgpu_client::PhoneInfo;
 use pocketgpu_client::lan::Found;
 use pocketgpu_proto::lan::Os;
 use pocketgpu_proto::local::{Request, Response};
-use pocketgpu_proto::msg::pair;
+use pocketgpu_proto::msg::{control, pair};
 use pocketgpu_proto::{Permission, Platform, read_frame, write_frame};
 
 fn info() -> PhoneInfo {
@@ -128,4 +128,36 @@ async fn nothing_is_heard_when_finding_on_the_wifi_is_off() {
     };
     assert!(result.is_err());
     assert_eq!(h.agent.permission_of(&phone.key.public()), None);
+}
+
+#[tokio::test]
+async fn a_paired_phone_gets_the_lan_key_and_whether_finding_is_on() {
+    let h = Harness::start().await;
+    let phone = h.phone(Some(Permission::View)).await;
+    let machine = h.connect(&phone).await.unwrap();
+    let first = machine.control(control::Request::GetLanKey).await.unwrap();
+    let control::Response::LanKey { key, on } = first else {
+        panic!("expected LanKey, got {first:?}");
+    };
+    assert!(on, "on by default");
+    assert_ne!(key, [0u8; 32]);
+
+    h.agent.config.write().unwrap().lan = false;
+    let again = machine.control(control::Request::GetLanKey).await.unwrap();
+    assert_eq!(
+        again,
+        control::Response::LanKey { key, on: false },
+        "same key, now off"
+    );
+}
+
+#[tokio::test]
+async fn an_unpaired_phone_never_gets_the_lan_key() {
+    let h = Harness::start().await;
+    let stranger = h.phone(None).await;
+    let result = match h.connect(&stranger).await {
+        Ok(m) => m.control(control::Request::GetLanKey).await.map(|_| ()),
+        Err(e) => Err(e),
+    };
+    assert!(result.is_err());
 }
