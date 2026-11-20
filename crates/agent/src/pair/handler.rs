@@ -13,7 +13,7 @@ use pocketgpu_proto::{Error, ErrorCode, read_frame, write_frame};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use super::code::Ask;
+use super::code::{Ask, Decision, NOBODY_THERE};
 use crate::audit::{self, Event};
 use crate::daemon::state::Agent;
 
@@ -138,19 +138,18 @@ async fn serve(
             "pairing was cancelled on the machine",
         ))
     } else {
-        // Ends when the person decides, or when `pgpu pair` stops (counted as a denial).
-        match decided.await {
-            Ok(Some(permission)) => Response::Approved {
-                permission,
-                relays: agent
+        // Ends when the person decides, or when `pgpu pair` stops (no answer, not a "no").
+        decided
+            .await
+            .unwrap_or(Decision::NoAnswer(NOBODY_THERE))
+            .reply(|| {
+                agent
                     .config
                     .read()
                     .expect("config lock poisoned")
                     .relays
-                    .clone(),
-            },
-            _ => Response::Denied,
-        }
+                    .clone()
+            })
     };
     finish(conn, &mut send, &reply).await
 }

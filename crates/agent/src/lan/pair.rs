@@ -21,7 +21,7 @@ use tokio::time::timeout;
 
 use crate::audit::{self, Event};
 use crate::daemon::state::Agent;
-use crate::pair::code::Ask;
+use crate::pair::code::{Ask, Decision, NOBODY_THERE};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Refusals (a no, or no answer) that close pairing from the Wi-Fi for a while.
@@ -218,20 +218,10 @@ async fn ask(
         finish(conn, send, &reply).await?;
         return Ok(false);
     }
-    let (reply, paired) = match decided.await {
-        Ok(Some(permission)) => (
-            Response::Approved {
-                permission,
-                relays: agent
-                    .config
-                    .read()
-                    .expect("config lock poisoned")
-                    .relays
-                    .clone(),
-            },
-            true,
-        ),
-        _ => {
+    let decision = decided.await.unwrap_or(Decision::NoAnswer(NOBODY_THERE));
+    let paired = matches!(decision, Decision::Allow(_));
+    if !paired {
+        {
             if let Err(e) = audit::record(
                 &agent.db(),
                 &device.to_string(),
@@ -241,9 +231,16 @@ async fn ask(
             ) {
                 tracing::warn!("could not write audit entry: {e}");
             }
-            (Response::Denied, false)
         }
-    };
+    }
+    let reply = decision.reply(|| {
+        agent
+            .config
+            .read()
+            .expect("config lock poisoned")
+            .relays
+            .clone()
+    });
     finish(conn, send, &reply).await?;
     Ok(paired)
 }

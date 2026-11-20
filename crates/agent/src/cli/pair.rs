@@ -170,8 +170,9 @@ fn menu(ask: &PairAsk, shell_on: Option<bool>, user: &str) -> String {
     )
 }
 
-/// Asks on the terminal; Enter picks Control, the usual choice. End of input counts as a
-/// denial.
+/// Asks on the terminal; Enter picks Control, the usual choice. With no input to read (a
+/// closed pipe, or started without a terminal) it stops with why: the phone then hears that
+/// nobody could answer, not a "no".
 async fn prompt(ask: PairAsk, shell_on: Option<bool>) -> Result<Option<Permission>> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -185,7 +186,8 @@ async fn prompt(ask: PairAsk, shell_on: Option<bool>) -> Result<Option<Permissio
             std::io::stderr().flush()?;
             let mut line = String::new();
             if stdin.read_line(&mut line)? == 0 {
-                return Ok(None);
+                eprintln!();
+                bail!(CANT_ASK);
             }
             if let Some(answer) = parse_answer(&line) {
                 return Ok(answer);
@@ -194,6 +196,9 @@ async fn prompt(ask: PairAsk, shell_on: Option<bool>) -> Result<Option<Permissio
     })
     .await?
 }
+
+const CANT_ASK: &str = "can't ask here: nothing can be typed into this command, so the phone \
+     was not paired. Run `pgpu pair` in a terminal, or choose ahead with --permission control";
 
 fn parse_answer(line: &str) -> Option<Option<Permission>> {
     match line.trim().to_ascii_lowercase().as_str() {

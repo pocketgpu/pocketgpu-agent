@@ -21,7 +21,7 @@ use crate::audit::{self, Event};
 use crate::daemon::endpoint::{self, Relays};
 use crate::daemon::state::Agent;
 use crate::store::devices;
-use code::{ActiveCode, Ask, Refusal};
+use code::{ActiveCode, Ask, Decision, NO_ANSWER_IN_TIME, NOBODY_THERE, Refusal};
 
 /// How long the person at the machine has to answer once a phone proved the code.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -271,11 +271,11 @@ async fn decide<W: AsyncWrite + Unpin>(
     let permission: Option<Permission> = match answer {
         Ok(Some(p)) => p,
         Ok(None) => {
-            let _ = ask.decision.send(None);
+            let _ = ask.decision.send(Decision::NoAnswer(NOBODY_THERE));
             return Ok(None);
         }
         Err(_) => {
-            let _ = ask.decision.send(None);
+            let _ = ask.decision.send(Decision::NoAnswer(NO_ANSWER_IN_TIME));
             return Ok(Some(Response::PairEnded(
                 "No answer in time; the phone was not paired.".into(),
             )));
@@ -283,7 +283,7 @@ async fn decide<W: AsyncWrite + Unpin>(
     };
 
     let Some(permission) = permission else {
-        let _ = ask.decision.send(None);
+        let _ = ask.decision.send(Decision::Deny);
         return Ok(Some(Response::PairEnded(format!(
             "Denied \"{}\".",
             question.device_name
@@ -311,7 +311,7 @@ async fn decide<W: AsyncWrite + Unpin>(
             },
         )?;
     }
-    if ask.decision.send(Some(permission)).is_err() {
+    if ask.decision.send(Decision::Allow(permission)).is_err() {
         tracing::warn!("the phone left before hearing it was paired");
     }
     Ok(Some(Response::Paired {

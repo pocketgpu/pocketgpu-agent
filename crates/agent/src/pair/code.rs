@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use iroh::PublicKey;
+use pocketgpu_proto::msg::pair::Response;
 use pocketgpu_proto::pairing::{self, PairCode};
-use pocketgpu_proto::{Permission, Platform};
+use pocketgpu_proto::{Error, ErrorCode, Permission, Platform};
 use tokio::sync::{mpsc, oneshot};
 
 pub const LIFETIME: Duration = Duration::from_secs(5 * 60);
@@ -21,10 +22,40 @@ pub struct Ask {
     pub device_name: String,
     pub platform: Platform,
     pub push_ticket: Option<String>,
-    /// The permission to grant, or `None` to deny.
-    pub decision: oneshot::Sender<Option<Permission>>,
+    /// What the person at the machine decided.
+    pub decision: oneshot::Sender<Decision>,
     /// Found on this Wi-Fi (F47) rather than proving a code.
     pub from_lan: bool,
+}
+
+/// The answer to an [`Ask`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Allow(Permission),
+    /// Someone at the machine said no.
+    Deny,
+    /// Nobody could answer: the phone hears why, not a "no".
+    NoAnswer(&'static str),
+}
+
+/// `pgpu pair` stopped, or couldn't read typing, before anyone answered.
+pub const NOBODY_THERE: &str = "nobody answered at the computer: `pgpu pair` stopped there or couldn't ask. Run it again in a terminal";
+/// Nobody answered within [`super::APPROVAL_TIMEOUT`].
+pub const NO_ANSWER_IN_TIME: &str =
+    "nobody answered at the computer in 2 minutes. Run `pgpu pair` again";
+
+impl Decision {
+    /// The reply to the phone; `relays` is only read when the phone was allowed.
+    pub fn reply(self, relays: impl FnOnce() -> Vec<String>) -> Response {
+        match self {
+            Self::Allow(permission) => Response::Approved {
+                permission,
+                relays: relays(),
+            },
+            Self::Deny => Response::Denied,
+            Self::NoAnswer(why) => Response::Error(Error::new(ErrorCode::Busy, why)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
