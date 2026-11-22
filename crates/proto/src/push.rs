@@ -42,12 +42,14 @@ pub enum AlertKind {
     NewDevice,
     /// Every GPU on the machine idle for a while (F38, Pro).
     IdleGpu,
+    /// A guest first opened a shared model's link (F48): free, like the share.
+    GuestStarted,
 }
 
 impl AlertKind {
-    /// Only job alerts and new-device alerts reach Free tickets.
+    /// Only job alerts, new-device alerts and a guest starting reach Free tickets.
     pub fn needs_pro(self) -> bool {
-        !matches!(self, Self::JobEnd | Self::NewDevice)
+        !matches!(self, Self::JobEnd | Self::NewDevice | Self::GuestStarted)
     }
 }
 

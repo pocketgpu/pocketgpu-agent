@@ -48,10 +48,19 @@ impl ProtocolHandler for ModelGuest {
             };
             let (keep, send) = match req {
                 GuestToAgent::Claim { share, proof } => {
-                    let reply = claim(&self.agent, key, share, proof);
+                    let (reply, fresh) = claim(&self.agent, key, share, proof);
                     let ok = matches!(reply, AgentToGuest::Claimed(_));
                     if ok {
                         self.agent.track(key, conn.clone());
+                    }
+                    if let Some(share) = fresh {
+                        let agent = self.agent.clone();
+                        tokio::spawn(async move {
+                            match crate::alerts::guest_started::send(&agent, &share).await {
+                                Ok(n) => tracing::info!(phones = n, "guest-started push sent"),
+                                Err(e) => tracing::warn!("guest-started push not sent: {e:#}"),
+                            }
+                        });
                     }
                     let _ = write_frame(&mut send, &reply).await;
                     let _ = send.finish();
@@ -172,9 +181,16 @@ pub fn peek(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> Ag
     }
 }
 
-/// Checks a claim and, when it is right, makes this key the share's only guest.
-pub fn claim(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> AgentToGuest {
-    let refused = AgentToGuest::Refused;
+/// Checks a claim and, when it is right, makes this key the share's only guest. The share
+/// comes back too when this claim is the first (for the owner's push), not when the same
+/// browser opens its link again.
+pub fn claim(
+    agent: &Agent,
+    key: PublicKey,
+    share_id: u64,
+    given: [u8; 32],
+) -> (AgentToGuest, Option<store::Share>) {
+    let refused = |r| (AgentToGuest::Refused(r), None);
     if !agent.shares.may_try(&key) {
         return refused(GuestRefusal::TooManyTries);
     }
@@ -200,7 +216,10 @@ pub fn claim(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> A
     if store::share_of_guest(&agent.db(), &key_text).ok().flatten() == Some(share_id)
         && !is_over(&share, now)
     {
-        return AgentToGuest::Claimed(guest_status(agent, &share, now));
+        return (
+            AgentToGuest::Claimed(guest_status(agent, &share, now)),
+            None,
+        );
     }
     match share.state {
         ShareState::Ended => return refused(GuestRefusal::Ended),
@@ -224,5 +243,6 @@ pub fn claim(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> A
         .ok()
         .flatten()
         .unwrap_or(share);
-    AgentToGuest::Claimed(guest_status(agent, &share, now))
+    let status = guest_status(agent, &share, now);
+    (AgentToGuest::Claimed(status), Some(share))
 }

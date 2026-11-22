@@ -231,6 +231,7 @@ fn kind_name(kind: AlertKind) -> &'static str {
         AlertKind::DiskFull => "disk_full",
         AlertKind::NewDevice => "new_device",
         AlertKind::IdleGpu => "idle_gpu",
+        AlertKind::GuestStarted => "guest_started",
     }
 }
 

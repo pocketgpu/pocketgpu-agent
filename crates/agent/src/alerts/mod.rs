@@ -3,6 +3,7 @@
 
 pub mod channels;
 pub mod client;
+pub mod guest_started;
 pub mod heartbeat;
 pub mod idle;
 pub mod new_device;
