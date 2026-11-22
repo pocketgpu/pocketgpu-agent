@@ -292,6 +292,9 @@ pub mod control {
         StopShare {
             share: u64,
         },
+        /// Changes how long a share lasts, its daily limit and whether it pauses for jobs
+        /// (Shell); replies `Shares`. Agents before it answer with an error.
+        ChangeShare(crate::share::ShareChange),
     }
 
     /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
@@ -516,7 +519,8 @@ pub mod control {
                 // A waiting share's link opens the model to whoever has it (F48).
                 | Self::CreateShare(_)
                 | Self::ListShares
-                | Self::StopShare { .. } => Permission::Shell,
+                | Self::StopShare { .. }
+                | Self::ChangeShare(_) => Permission::Shell,
             }
         }
     }

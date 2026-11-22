@@ -2,7 +2,7 @@
 //! connection and all Shell; the link is built here from the machine's key.
 
 use pocketgpu_proto::msg::control::{Request, Response};
-use pocketgpu_proto::share::{NewShare, ShareInfo};
+use pocketgpu_proto::share::{NewShare, ShareChange, ShareInfo};
 
 use crate::{ClientError, Machine};
 
@@ -25,6 +25,14 @@ impl Machine {
     /// Ends a share at once; the shares after.
     pub async fn stop_share(&self, share: u64) -> Result<Vec<ShareInfo>, ClientError> {
         match self.control(Request::StopShare { share }).await? {
+            Response::Shares(s) => Ok(s),
+            _ => Err(ClientError::NoReply),
+        }
+    }
+
+    /// A share's new end, daily limit and pause; the shares after.
+    pub async fn change_share(&self, change: ShareChange) -> Result<Vec<ShareInfo>, ClientError> {
+        match self.control(Request::ChangeShare(change)).await? {
             Response::Shares(s) => Ok(s),
             _ => Err(ClientError::NoReply),
         }

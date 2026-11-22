@@ -1,5 +1,7 @@
 <script lang="ts">
 	import Answer from '../lib/Answer.svelte';
+	import type { Chats } from '../lib/chats.js';
+	import ChatsSheet from '../lib/ChatsSheet.svelte';
 	import { Follow } from '../lib/follow.svelte.js';
 	import Icon from '../lib/Icon.svelte';
 	import { Keyboard } from '../lib/keyboard.svelte.js';
@@ -13,13 +15,23 @@
 		status,
 		messages,
 		writing,
-		send
+		send,
+		chats,
+		newChat,
+		openChat
 	}: {
 		status: Status;
 		messages: Message[];
 		writing: string | null;
 		send: (text: string) => void;
+		chats: Chats;
+		newChat: () => void;
+		openChat: (id: string) => void;
 	} = $props();
+
+	// Slot "New chat and earlier chats": the clock lists them, + starts an empty one. Both
+	// wait while an answer is being written, which belongs to the chat it was asked in.
+	let listing = $state(false);
 
 	let draft = $state('');
 	const canSend = $derived(draft.trim().length > 0 && writing === null);
@@ -33,6 +45,11 @@
 		void messages.length;
 		void writing;
 		follow.down();
+	});
+	// Another chat opened: start at its end.
+	$effect(() => {
+		void chats.open;
+		follow.down(true);
 	});
 
 	function submit(e: SubmitEvent) {
@@ -80,8 +97,26 @@
 				{status.computer} · private · {leftWords(status)}
 			</p>
 		</div>
+		<button
+			type="button"
+			aria-label="Your chats"
+			disabled={writing !== null}
+			class="key flex size-10 shrink-0 items-center justify-center self-center rounded-[14px] border border-border bg-surface disabled:opacity-40"
+			onclick={() => (listing = true)}
+		>
+			<Icon name="history" size={18} />
+		</button>
+		<button
+			type="button"
+			aria-label="New chat"
+			disabled={writing !== null || messages.length === 0}
+			class="key flex size-10 shrink-0 items-center justify-center self-center rounded-[14px] border border-border bg-surface disabled:opacity-40"
+			onclick={newChat}
+		>
+			<Icon name="plus" size={18} />
+		</button>
 		<a
-			class="hidden shrink-0 text-[13px] font-semibold text-text-2 sm:block"
+			class="hidden shrink-0 self-center text-[13px] font-semibold text-text-2 sm:block"
 			href="https://pocketgpu.app"
 			rel="noopener"
 		>
@@ -178,3 +213,5 @@
 		</a>
 	</p>
 </main>
+
+<ChatsSheet bind:open={listing} {chats} owner={status.from ?? 'the owner'} {newChat} {openChat} />

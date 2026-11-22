@@ -517,6 +517,13 @@ fn share_messages_keep_their_numbers() {
     assert_eq!(tag(&Request::CreateShare(new)), 31);
     assert_eq!(tag(&Request::ListShares), 32);
     assert_eq!(tag(&Request::StopShare { share: 1 }), 33);
+    let change = pocketgpu_proto::share::ShareChange {
+        share: 1,
+        end: pocketgpu_proto::share::ShareEnd::Keep,
+        daily_limit: None,
+        pause_for_jobs: true,
+    };
+    assert_eq!(tag(&Request::ChangeShare(change)), 34);
     assert_eq!(tag(&Response::Shares(vec![])), 26);
     let claim = GuestToAgent::Claim {
         share: 1,

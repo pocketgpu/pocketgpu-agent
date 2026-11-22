@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { Connection, freshKey, type Refusal, type Reply, type Status } from './lib/guest.js';
 	import { readFragment } from './lib/link.js';
+	import { fresh, openMessages, withMessages, type Chats } from './lib/chats.js';
 	import {
-		getChat,
+		getChats,
 		getLink,
 		lastLink,
-		putChat,
+		putChats,
 		putLink,
 		context,
 		type Message,
@@ -29,6 +30,8 @@
 	let view: View = $state({ v: 'loading' });
 	let status: Status | null = $state(null);
 	let messages: Message[] = $state([]);
+	/** All of this link's chats; `messages` is the open one's. */
+	let chats: Chats = $state({ open: '', chats: [] });
 	let writing: string | null = $state(null);
 	let busy = $state(false);
 	let saved: Saved | null = null;
@@ -110,18 +113,36 @@
 		busy = false;
 	}
 
+	/** Keeps the open chat's messages with the others, in this browser. */
+	async function save() {
+		chats = withMessages(chats, $state.snapshot(messages));
+		await putChats(saved!.id, $state.snapshot(chats));
+	}
+
+	/** Not while an answer is being written: it belongs to the chat it was asked in. A
+	 *  question waiting for the computer is let go with its chat. */
+	async function switchTo(next: Chats) {
+		if (writing !== null) return;
+		pending = null;
+		chats = next;
+		messages = openMessages(next);
+		await putChats(saved!.id, $state.snapshot(chats));
+	}
+	const newChat = () => switchTo(fresh(chats));
+	const openChat = (id: string) => switchTo({ ...chats, open: id });
+
 	/** The message goes back off the chat, to be sent again when the computer can take it. */
 	async function holdBack(text: string) {
 		messages = messages.slice(0, -1);
 		pending = text;
-		await putChat(saved!.id, $state.snapshot(messages));
+		await save();
 	}
 
 	async function send(text: string) {
 		const c = await connect();
 		if (!c) return void (pending = text);
 		messages = [...messages, { role: 'User', text, at: Date.now() }];
-		await putChat(saved!.id, $state.snapshot(messages));
+		await save();
 		writing = '';
 		try {
 			const reply = await c.chat(context(messages), (t) => (writing = (writing ?? '') + t));
@@ -136,7 +157,7 @@
 					}
 				];
 				status = { ...status!, used_today: reply.Done.used_today };
-				await putChat(saved!.id, $state.snapshot(messages));
+				await save();
 			} else if ('Refused' in reply) {
 				const r = reply.Refused;
 				// Waiting states keep the question for later; TooLong and the like drop it.
@@ -185,7 +206,8 @@
 			view = { v: 'nolink' };
 			return;
 		}
-		messages = await getChat(saved.id);
+		chats = await getChats(saved.id);
+		messages = openMessages(chats);
 		await resume();
 	}
 
@@ -209,7 +231,7 @@
 {:else if view.v === 'welcome'}
 	<Welcome {status} {busy} {start} />
 {:else if view.v === 'chat' && status}
-	<Chat {status} {messages} {writing} {send} />
+	<Chat {status} {messages} {writing} {send} {chats} {newChat} {openChat} />
 {:else if view.v === 'state'}
 	<State
 		model={status?.model ?? null}

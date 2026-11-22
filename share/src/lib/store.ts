@@ -1,6 +1,8 @@
 // What this browser keeps for each link it opened (F48), in IndexedDB on share.pocketgpu.app
 // only: its own key for the computer, the link itself (so a reload works after the address
-// bar is cleaned), and the chat. Nothing of it goes anywhere but the computer.
+// bar is cleaned), and its chats. Nothing of it goes anywhere but the computer.
+
+import { fromSaved, type Chats } from './chats.js';
 
 export type Role = 'User' | 'Assistant';
 export type Message = {
@@ -56,10 +58,11 @@ export async function lastLink(): Promise<Saved | undefined> {
 	return all.at(-1);
 }
 
-export const getChat = async (id: string) =>
-	(await run<Message[] | undefined>(CHATS, 'readonly', (s) => s.get(id))) ?? [];
-export const putChat = (id: string, messages: Message[]) =>
-	run(CHATS, 'readwrite', (s) => s.put(messages, id));
+/** The link's chats (chats.ts); a list of messages from before several chats is read too. */
+export const getChats = async (id: string): Promise<Chats> =>
+	fromSaved(await run<unknown>(CHATS, 'readonly', (s) => s.get(id)));
+export const putChats = (id: string, chats: Chats) =>
+	run(CHATS, 'readwrite', (s) => s.put(chats, id));
 
 /** The newest messages that fit what the computer accepts, oldest first, ending with the
  *  guest's question. A message too long on its own is cut to fit. */

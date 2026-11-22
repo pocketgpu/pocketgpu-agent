@@ -1,10 +1,10 @@
 //! The owner's requests on `pgpu/control/1` (Shell, checked before these run): make, list
-//! and stop shares.
+//! change and stop shares.
 
 use std::sync::Arc;
 
 use pocketgpu_proto::msg::control::Response;
-use pocketgpu_proto::share::{MAX_OPEN_SHARES, NewShare};
+use pocketgpu_proto::share::{MAX_OPEN_SHARES, NewShare, ShareChange, ShareEnd, ShareState};
 use pocketgpu_proto::{Error, ErrorCode};
 
 use super::{chat, end, info, store, target};
@@ -81,5 +81,49 @@ pub fn stop(agent: &Agent, peer: &Peer, share: u64) -> Response {
         Err(e) => return internal(e),
     }
     end(agent, share, &peer.key.to_string(), "stopped");
+    list(agent)
+}
+
+/// New end, limit and pause for a share still going; the guest's page shows them at its next
+/// look (within seconds). Counted from now, like a new share.
+pub fn change(agent: &Agent, peer: &Peer, change: ShareChange) -> Response {
+    if let Err(why) = change.check() {
+        return Response::Error(Error::new(ErrorCode::Invalid, why));
+    }
+    let now = now_ms();
+    let share = match store::get(&agent.db(), change.share) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Response::Error(Error::new(ErrorCode::NotFound, "no such share")),
+        Err(e) => return internal(e),
+    };
+    if share.state == ShareState::Ended || super::is_over(&share, now) {
+        return Response::Error(Error::new(
+            ErrorCode::Invalid,
+            "this share has ended; share the model again",
+        ));
+    }
+    let ends_ms = match change.end {
+        ShareEnd::Keep => share.ends_ms,
+        ShareEnd::After { minutes } => Some(now + i64::from(minutes) * 60_000),
+        ShareEnd::Never => None,
+    };
+    let db = agent.db();
+    if let Err(e) = store::change(
+        &db,
+        share.id,
+        ends_ms,
+        change.daily_limit,
+        change.pause_for_jobs,
+    ) {
+        return internal(e);
+    }
+    let _ = audit::record(
+        &db,
+        &peer.key.to_string(),
+        Event::Share,
+        &target(&share),
+        "changed",
+    );
+    drop(db);
     list(agent)
 }

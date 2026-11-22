@@ -184,6 +184,7 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
         Request::CreateShare(new) => crate::share::control::create(agent, peer, new).await,
         Request::ListShares => crate::share::control::list(agent),
         Request::StopShare { share } => crate::share::control::stop(agent, peer, share),
+        Request::ChangeShare(c) => crate::share::control::change(agent, peer, c),
         Request::ExtendGuest { device, minutes } => {
             match crate::pair::guest::extend(agent, &peer.key, &device, minutes) {
                 Ok(()) => guests(agent),
@@ -261,6 +262,7 @@ fn describe(req: &Request) -> String {
         Request::CreateShare(n) => format!("CreateShare {}", n.model),
         Request::ListShares => "ListShares".into(),
         Request::StopShare { share } => format!("StopShare {share}"),
+        Request::ChangeShare(c) => format!("ChangeShare {}", c.share),
         Request::ExtendGuest { .. } => "ExtendGuest".into(),
         Request::PowerAction { action } => format!("PowerAction {}", action.as_str()),
     }

@@ -280,6 +280,42 @@ impl NewShare {
     }
 }
 
+/// A share's new end when it is changed: as it was, a day, a week or a month from now, or
+/// until stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShareEnd {
+    Keep,
+    After { minutes: u32 },
+    Never,
+}
+
+/// What the owner may change on a share (`control::Request::ChangeShare`); the link, the
+/// person and the names stay as they were.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareChange {
+    pub share: u64,
+    pub end: ShareEnd,
+    pub daily_limit: Option<u32>,
+    pub pause_for_jobs: bool,
+}
+
+impl ShareChange {
+    /// The same choices as for a new share.
+    pub fn check(&self) -> Result<(), &'static str> {
+        if let ShareEnd::After { minutes } = self.end
+            && !MINUTES.contains(&minutes)
+        {
+            return Err("a share lasts a day, a week, a month or until stopped");
+        }
+        if let Some(l) = self.daily_limit
+            && !LIMITS.contains(&l)
+        {
+            return Err("the daily limit is 50, 200, 500 or none");
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

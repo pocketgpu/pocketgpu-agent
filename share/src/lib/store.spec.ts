@@ -2,11 +2,11 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import {
 	context,
-	getChat,
+	getChats,
 	getLink,
 	lastLink,
 	MAX_MESSAGES,
-	putChat,
+	putChats,
 	putLink,
 	type Message
 } from './store.js';
@@ -16,11 +16,14 @@ const msg = (role: Message['role'], text: string): Message => ({ role, text, at:
 describe('store', () => {
 	it('keeps the link, its key and the chat across visits', async () => {
 		await putLink({ id: 'l1', fragment: 'AAA', key: [1, 2, 3], claimed: true });
-		await putChat('l1', [msg('User', 'hi'), msg('Assistant', 'hello')]);
+		await putChats('l1', {
+			open: 'c1',
+			chats: [{ id: 'c1', messages: [msg('User', 'hi')], at: 1 }]
+		});
 		expect((await getLink('l1'))?.key).toEqual([1, 2, 3]);
 		expect((await lastLink())?.id).toBe('l1');
-		expect(await getChat('l1')).toHaveLength(2);
-		expect(await getChat('nope')).toEqual([]);
+		expect((await getChats('l1')).chats[0].messages).toHaveLength(1);
+		expect((await getChats('nope')).chats).toEqual([]);
 	});
 });
 

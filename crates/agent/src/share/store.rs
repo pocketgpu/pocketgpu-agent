@@ -145,6 +145,29 @@ pub fn set_state(db: &Connection, id: u64, state: ShareState, now_ms: i64) -> Re
     Ok(())
 }
 
+/// A share's new end, daily limit and pause. A link not opened yet can be opened until the
+/// new end, at most a week after it was made.
+pub fn change(
+    db: &Connection,
+    id: u64,
+    ends_ms: Option<i64>,
+    daily_limit: Option<u32>,
+    pause_for_jobs: bool,
+) -> Result<()> {
+    db.execute(
+        "UPDATE model_shares SET ends_ms = ?2, daily_limit = ?3, pause_for_jobs = ?4, \
+         claim_until_ms = MIN(created_ms + ?5, COALESCE(?2, created_ms + ?5)) WHERE id = ?1",
+        params![
+            id as i64,
+            ends_ms,
+            daily_limit.map(i64::from),
+            i64::from(pause_for_jobs),
+            pocketgpu_proto::share::CLAIM_WITHIN_MS,
+        ],
+    )?;
+    Ok(())
+}
+
 /// The share this guest key belongs to.
 pub fn share_of_guest(db: &Connection, key: &str) -> Result<Option<u64>> {
     Ok(db

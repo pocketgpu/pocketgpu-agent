@@ -342,6 +342,75 @@ async fn limits_pause_and_stop_hold() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_holds_at_once_and_only_while_it_goes() {
+    use pocketgpu_proto::share::{ShareChange, ShareEnd};
+    let (h, owner) = setup().await;
+    let s = owner.create_share(new_share(Some(50))).await.unwrap();
+    let link = link_of(&h, &s);
+    let key = SecretKey::generate();
+    let conn = guest_conn(&h, &key, alpn::MODEL_GUEST).await;
+    ask(&conn, claim_req(&link, &key)).await;
+    let change = |end, limit, pause| ShareChange {
+        share: s.id,
+        end,
+        daily_limit: limit,
+        pause_for_jobs: pause,
+    };
+
+    // Only Full control, and only the offered choices.
+    let controller = h.phone(Some(Permission::Control)).await;
+    let c = h.connect(&controller).await.unwrap();
+    let same = change(ShareEnd::Keep, Some(200), false);
+    assert_eq!(code(c.change_share(same).await), ErrorCode::Forbidden);
+    let odd = change(ShareEnd::After { minutes: 5 }, None, true);
+    assert_eq!(code(owner.change_share(odd).await), ErrorCode::Invalid);
+
+    // 50 used, then 200 a day and no pause: the guest goes on, even with a job running.
+    {
+        let db = h.agent.db();
+        let day = pocketgpu::share::day::local_day(pocketgpu::store::db::now_ms());
+        db.execute(
+            "INSERT INTO model_usage (share_id, day, messages) VALUES (?1, ?2, 50)",
+            rusqlite::params![s.id as i64, day],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO jobs (name, command, cwd, started_at, state, log_path) \
+             VALUES ('train', 'python train.py', '/tmp', 0, 'running', '/tmp/x.log')",
+            [],
+        )
+        .unwrap();
+    }
+    let list = owner
+        .change_share(change(ShareEnd::After { minutes: 1440 }, Some(200), false))
+        .await
+        .unwrap();
+    let now = pocketgpu::store::db::now_ms();
+    let after = list.iter().find(|x| x.id == s.id).unwrap();
+    assert_eq!(after.limit, Some(200));
+    assert!(!after.pause_for_jobs);
+    let ends = after.ends_ms.unwrap();
+    assert!((ends - (now + 86_400_000)).abs() < 60_000);
+    assert!(
+        ask(&conn, chat("hi"))
+            .await
+            .iter()
+            .any(|r| matches!(r, AgentToGuest::Done { .. }))
+    );
+    let never = owner
+        .change_share(change(ShareEnd::Never, None, true))
+        .await
+        .unwrap();
+    assert_eq!(never.iter().find(|x| x.id == s.id).unwrap().ends_ms, None);
+    assert_eq!(h.audit_events("share"), 4);
+
+    // An ended share stays ended.
+    owner.stop_share(s.id).await.unwrap();
+    let late = change(ShareEnd::Never, None, true);
+    assert_eq!(code(owner.change_share(late).await), ErrorCode::Invalid);
+}
+
 /// Collects everything the agent logs, at every level, on this thread's runtime.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
