@@ -201,7 +201,8 @@ function Install-PocketGPU {
         elseif ($env:PGPU_VERSION) { "https://github.com/$script:Repo/releases/download/$($env:PGPU_VERSION)" }
         else { "https://github.com/$script:Repo/releases/latest/download" }
     $file = 'pocketgpu-x86_64-windows.tar.gz'
-    $trayOffer = -not $env:PGPU_NO_TRAY -and [Environment]::UserInteractive -and
+    # The desktop app isn't shipped since 22 Nov 2026 (phones only), so it isn't offered.
+    $trayOffer = $false -and -not $env:PGPU_NO_TRAY -and [Environment]::UserInteractive -and
         -not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketGPU')
     if ($trayOffer) { $script:Steps = 7 }
 
