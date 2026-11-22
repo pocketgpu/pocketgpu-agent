@@ -128,7 +128,12 @@
 			if ('Done' in reply) {
 				messages = [
 					...messages,
-					{ role: 'Assistant', text: writing ?? '', at: Date.now() }
+					{
+						role: 'Assistant',
+						text: writing ?? '',
+						at: Date.now(),
+						...(reply.Done.speed && { speed: reply.Done.speed })
+					}
 				];
 				status = { ...status!, used_today: reply.Done.used_today };
 				await putChat(saved!.id, $state.snapshot(messages));

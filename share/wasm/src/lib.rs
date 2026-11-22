@@ -112,7 +112,8 @@ mod web {
         }
 
         /// Sends the chat (an array of `{ role: "User" | "Assistant", text }`); calls
-        /// `on_text` with each part of the answer; resolves with `Done` or `Refused`.
+        /// `on_text` with each part of the answer; resolves with `Done` or `Refused`. A
+        /// `Speed` the computer sent comes inside `Done`, as `{ used_today, speed }`.
         pub async fn chat(
             &self,
             messages: JsValue,
@@ -122,7 +123,25 @@ mod web {
             let replies = self
                 .ask(&GuestToAgent::Chat { messages }, Some(&on_text))
                 .await?;
-            to_js(replies.into_iter().last())
+            let speed = replies.iter().find_map(|r| match r {
+                AgentToGuest::Speed { tokens_per_s, ms } => Some((*tokens_per_s, *ms)),
+                _ => None,
+            });
+            let last = replies
+                .into_iter()
+                .rfind(|r| !matches!(r, AgentToGuest::Speed { .. }));
+            let reply = to_js(last)?;
+            if let Some((tokens_per_s, ms)) = speed
+                && let Ok(done) = js_sys::Reflect::get(&reply, &JsValue::from_str("Done"))
+                && done.is_object()
+            {
+                let s = js_sys::Object::new();
+                let set = |k: &str, v: u32| js_sys::Reflect::set(&s, &k.into(), &v.into());
+                let _ = set("tokens_per_s", tokens_per_s);
+                let _ = set("ms", ms);
+                let _ = js_sys::Reflect::set(&done, &"speed".into(), &s);
+            }
+            Ok(reply)
         }
 
         /// Closes the connection; the computer keeps this browser's place.

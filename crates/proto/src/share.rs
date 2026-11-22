@@ -174,14 +174,22 @@ pub enum GuestRefusal {
     TooManyTries,
 }
 
-/// Computer → guest. A chat streams `Text`s, then `Done`.
+/// Computer → guest. A chat streams `Text`s, then `Speed` (newer computers), then `Done`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentToGuest {
     Claimed(GuestStatus),
     Status(GuestStatus),
     Text(String),
-    Done { used_today: u32 },
+    Done {
+        used_today: u32,
+    },
     Refused(GuestRefusal),
+    /// How fast the answer came, sent just before `Done`: tokens a second (rounded) and the
+    /// answer's whole time. Last, so pages from before it still read everything else.
+    Speed {
+        tokens_per_s: u32,
+        ms: u32,
+    },
 }
 
 /// A share as its owner sees it: counts, never text.

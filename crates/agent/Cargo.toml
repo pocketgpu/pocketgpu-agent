@@ -52,7 +52,7 @@ bytes = "1"
 blake3.workspace = true
 # Screen pictures as JPEG (F45).
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-ruzstd = "0.8"
+ruzstd = "0.9.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

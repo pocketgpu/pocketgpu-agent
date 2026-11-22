@@ -74,6 +74,33 @@ const JSON_RULES: Rule[] = [
 
 const RULES = { python: PYTHON, js: script(JS_WORDS), ts: script(TS_WORDS), json: JSON_RULES };
 
+/** A language for a block whose model didn't name one, from how the code looks: `python`,
+ * `javascript`, `json` or `shell`, or '' when nothing fits (the block stays plain). Small
+ * models often leave the language out. */
+export function guess(code: string): string {
+	const c = code.trim();
+	if (!c) return '';
+	if (/^[[{]/.test(c)) {
+		try {
+			JSON.parse(c);
+			return 'json';
+		} catch {
+			/* not JSON */
+		}
+	}
+	if (/^(?:def|class) \w+.*:\s*$|^(?:from \S+ )?import \w|^\s*print\(|^if __name__/m.test(c))
+		return 'python';
+	if (/^\s*(?:const|let|var|function|export|import .+ from) |=>|console\.log\(/m.test(c))
+		return 'javascript';
+	if (
+		/^\s*(?:\$ |sudo |npm |npx |pip3? |cd |ls |git |curl |brew |apt(?:-get)? |docker |ollama )/m.test(
+			c
+		)
+	)
+		return 'shell';
+	return '';
+}
+
 /** The code in coloured pieces; plain in one piece for a language not known here. */
 export function highlight(code: string, lang: string): Piece[] {
 	const name = NAMES[lang.trim().toLowerCase()];

@@ -28,10 +28,13 @@ export type Refusal =
 	| 'TooManyTries'
 	| { LimitReached: { resets_ms: number } };
 
+/** How fast an answer came (computers from v1.2.42 on). */
+export type Speed = { tokens_per_s: number; ms: number };
+
 export type Reply =
 	| { Claimed: Status }
 	| { Status: Status }
-	| { Done: { used_today: number } }
+	| { Done: { used_today: number; speed?: Speed } }
 	| { Refused: Refusal };
 
 let ready: Promise<unknown> | null = null;

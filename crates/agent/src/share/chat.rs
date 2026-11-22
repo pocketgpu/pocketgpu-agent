@@ -5,7 +5,7 @@
 //! other models. Nothing said is logged, not even its length.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::SendStream;
 use pocketgpu_proto::share::{
@@ -103,12 +103,7 @@ pub fn body(server: ModelServerRef, model: &str, messages: &[ChatMsg]) -> (Strin
 /// The answer's text in one line of the server's stream (Ollama's NDJSON or an
 /// OpenAI-style `data:` line); `None` for lines without text.
 pub fn text_of(server: ModelServerRef, line: &str) -> Option<String> {
-    let line = line.trim();
-    let json = match server {
-        ModelServerRef::Ollama => line,
-        ModelServerRef::Port(_) => line.strip_prefix("data:")?.trim(),
-    };
-    let v: Value = serde_json::from_str(json).ok()?;
+    let v = json_of(server, line)?;
     let text = match server {
         ModelServerRef::Ollama => v["message"]["content"].as_str(),
         ModelServerRef::Port(_) => v["choices"][0]["delta"]["content"].as_str(),
@@ -150,6 +145,7 @@ pub async fn run(agent: &Arc<Agent>, share: &Share, messages: Vec<ChatMsg>, out:
     let (path, json) = body(share.server, &share.model, &messages);
     drop(messages);
     let url = format!("{}{path}", base.trim_end_matches('/'));
+    let started = Instant::now();
     let res = match http.post(url).json(&json).send().await {
         Ok(r) if r.status().is_success() => r,
         _ => {
@@ -160,36 +156,107 @@ pub async fn run(agent: &Arc<Agent>, share: &Share, messages: Vec<ChatMsg>, out:
     drop(json);
     // Counted once the model took it, so a model that's gone costs the guest nothing.
     let used = store::count_message(&agent.db(), share.id, &today).unwrap_or(used + 1);
-    if stream(share.server, res, out).await {
-        send(out, &AgentToGuest::Done { used_today: used }).await;
+    let Some(pace) = stream(share.server, res, out).await else {
+        return;
+    };
+    if let Some(speed) = pace.speed(started) {
+        send(out, &speed).await;
+    }
+    send(out, &AgentToGuest::Done { used_today: used }).await;
+}
+
+/// What the answer's speed is worked out from: the pieces that came and when, or the tokens
+/// and time the server reports itself (Ollama's last line, an OpenAI-style `usage`).
+#[derive(Default)]
+struct Pace {
+    first: Option<Instant>,
+    pieces: f64,
+    told: Option<f64>,
+    told_secs: Option<f64>,
+}
+
+impl Pace {
+    fn line(&mut self, server: ModelServerRef, line: &str) {
+        let Some(v) = json_of(server, line) else {
+            return;
+        };
+        match server {
+            ModelServerRef::Ollama => {
+                if let (Some(n), Some(ns)) = (v["eval_count"].as_f64(), v["eval_duration"].as_f64())
+                    && ns > 0.0
+                {
+                    self.told = Some(n);
+                    self.told_secs = Some(ns / 1e9);
+                }
+            }
+            ModelServerRef::Port(_) => {
+                if let Some(n) = v["usage"]["completion_tokens"].as_f64() {
+                    self.told = Some(n);
+                }
+            }
+        }
+    }
+
+    fn piece(&mut self) {
+        self.first.get_or_insert_with(Instant::now);
+        self.pieces += 1.0;
+    }
+
+    /// `Speed`, when there was an answer to time.
+    fn speed(&self, started: Instant) -> Option<AgentToGuest> {
+        let tokens = self.told.unwrap_or(self.pieces);
+        let secs = self
+            .told_secs
+            .or_else(|| self.first.map(|f| f.elapsed().as_secs_f64()))?;
+        (secs > 0.05 && tokens > 0.0).then(|| AgentToGuest::Speed {
+            tokens_per_s: (tokens / secs).round() as u32,
+            ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+        })
     }
 }
 
-/// Streams the answer's text; false when the guest closed the stream (which drops the
+fn json_of(server: ModelServerRef, line: &str) -> Option<Value> {
+    let line = line.trim();
+    let json = match server {
+        ModelServerRef::Ollama => line,
+        ModelServerRef::Port(_) => line.strip_prefix("data:")?.trim(),
+    };
+    serde_json::from_str(json).ok()
+}
+
+/// Streams the answer's text; `None` when the guest closed the stream (which drops the
 /// request to the server and stops the answer).
-async fn stream(server: ModelServerRef, mut res: reqwest::Response, out: &mut SendStream) -> bool {
+async fn stream(
+    server: ModelServerRef,
+    mut res: reqwest::Response,
+    out: &mut SendStream,
+) -> Option<Pace> {
+    let mut pace = Pace::default();
     let mut pending = Vec::new();
-    loop {
-        match res.chunk().await {
-            Ok(Some(bytes)) => {
-                pending.extend_from_slice(&bytes);
-                while let Some(i) = pending.iter().position(|b| *b == b'\n') {
-                    let line: Vec<u8> = pending.drain(..=i).collect();
-                    if let Some(t) = text_of(server, &String::from_utf8_lossy(&line))
-                        && !send(out, &AgentToGuest::Text(t)).await
-                    {
-                        return false;
-                    }
-                }
+    while let Ok(Some(bytes)) = res.chunk().await {
+        pending.extend_from_slice(&bytes);
+        while let Some(i) = pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=i).collect();
+            if !pass(server, &String::from_utf8_lossy(&line), &mut pace, out).await {
+                return None;
             }
-            Ok(None) => break,
-            Err(_) => break,
         }
     }
-    if let Some(t) = text_of(server, &String::from_utf8_lossy(&pending)) {
-        return send(out, &AgentToGuest::Text(t)).await;
+    pass(server, &String::from_utf8_lossy(&pending), &mut pace, out)
+        .await
+        .then_some(pace)
+}
+
+/// One line of the server's stream: its text to the guest, its numbers to `pace`.
+async fn pass(server: ModelServerRef, line: &str, pace: &mut Pace, out: &mut SendStream) -> bool {
+    pace.line(server, line);
+    match text_of(server, line) {
+        Some(t) => {
+            pace.piece();
+            send(out, &AgentToGuest::Text(t)).await
+        }
+        None => true,
     }
-    true
 }
 
 #[cfg(test)]
@@ -236,5 +303,32 @@ mod tests {
         assert_eq!(text_of(ModelServerRef::Port(1), s).as_deref(), Some("lo"));
         assert_eq!(text_of(ModelServerRef::Port(1), "data: [DONE]"), None);
         assert_eq!(text_of(ModelServerRef::Ollama, r#"{"done":true}"#), None);
+    }
+
+    #[test]
+    fn speed_comes_from_what_the_server_says_or_the_pieces() {
+        let started = Instant::now();
+        let mut p = Pace::default();
+        assert!(p.speed(started).is_none());
+        p.line(
+            ModelServerRef::Ollama,
+            r#"{"done":true,"eval_count":84,"eval_duration":2000000000}"#,
+        );
+        p.piece();
+        assert!(matches!(
+            p.speed(started),
+            Some(AgentToGuest::Speed {
+                tokens_per_s: 42,
+                ..
+            })
+        ));
+        let mut p = Pace::default();
+        p.line(
+            ModelServerRef::Port(1),
+            r#"data: {"usage":{"completion_tokens":7}}"#,
+        );
+        assert_eq!(p.told, Some(7.0));
+        p.line(ModelServerRef::Port(1), "data: [DONE]");
+        assert_eq!(p.told, Some(7.0));
     }
 }

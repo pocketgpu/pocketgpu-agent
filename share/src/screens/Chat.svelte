@@ -1,5 +1,8 @@
 <script lang="ts">
 	import Answer from '../lib/Answer.svelte';
+	import { Follow } from '../lib/follow.svelte.js';
+	import Icon from '../lib/Icon.svelte';
+	import { Keyboard } from '../lib/keyboard.svelte.js';
 	import type { Status } from '../lib/guest.js';
 	import type { Message } from '../lib/store.js';
 	import { leftWords } from '../lib/words.js';
@@ -19,14 +22,25 @@
 	} = $props();
 
 	let draft = $state('');
-	let thread: HTMLElement | undefined = $state();
 	const canSend = $derived(draft.trim().length > 0 && writing === null);
+
+	// As in the app: new text is followed only while the guest is at the bottom; scrolling up
+	// stops it and shows Latest. On a phone the screen ends where the keyboard begins.
+	const follow = new Follow();
+	const keyboard = new Keyboard();
+	$effect(() => keyboard.watch(() => follow.down()));
+	$effect(() => {
+		void messages.length;
+		void writing;
+		follow.down();
+	});
 
 	function submit(e: SubmitEvent) {
 		e.preventDefault();
 		if (!canSend) return;
 		send(draft.trim());
 		draft = '';
+		follow.down(true);
 	}
 
 	function keydown(e: KeyboardEvent) {
@@ -36,14 +50,24 @@
 		}
 	}
 
-	$effect(() => {
-		void messages.length;
-		void writing;
-		thread?.scrollTo({ top: thread.scrollHeight });
-	});
+	let copied = $state<number | null>(null);
+	async function copy(i: number, text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			return;
+		}
+		copied = i;
+		setTimeout(() => copied === i && (copied = null), 1500);
+	}
+
+	const seconds = (ms: number) => (ms < 10_000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000));
 </script>
 
-<main class="mx-auto flex h-dvh w-full max-w-[760px] flex-col px-4">
+<main
+	class="mx-auto flex w-full max-w-[760px] flex-col px-4 pb-[env(safe-area-inset-bottom)]"
+	style:height={`calc(100dvh - ${keyboard.covered}px)`}
+>
 	<header class="flex items-end gap-3 pt-5 pb-3">
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 			<p class="flex items-center gap-2">
@@ -66,8 +90,14 @@
 	</header>
 
 	<section
-		bind:this={thread}
-		class="flex flex-1 flex-col gap-5 overflow-y-auto py-3"
+		bind:this={follow.list}
+		onscroll={follow.onscroll}
+		onwheel={follow.onwheel}
+		ontouchstart={follow.ontouchstart}
+		ontouchend={follow.ontouchend}
+		ontouchcancel={follow.ontouchcancel}
+		class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain py-3"
+		role="log"
 		aria-live="polite"
 	>
 		{#if messages.length === 0 && writing === null}
@@ -85,7 +115,24 @@
 					</p>
 				</div>
 			{:else}
-				<Answer text={m.text} />
+				<div class="flex flex-col gap-2">
+					<Answer text={m.text} />
+					<div class="flex items-center gap-3 px-1 text-text-3">
+						{#if m.speed}
+							<span class="font-mono text-[11.5px]">
+								{m.speed.tokens_per_s} tok/s · {seconds(m.speed.ms)} s
+							</span>
+						{/if}
+						<button
+							type="button"
+							aria-label={copied === i ? 'Copied' : 'Copy answer'}
+							class="relative ml-auto flex size-7 items-center justify-center rounded-[8px] after:absolute after:-inset-1.5 active:opacity-60"
+							onclick={() => copy(i, m.text)}
+						>
+							<Icon name={copied === i ? 'check' : 'copy'} />
+						</button>
+					</div>
+				</div>
 			{/if}
 		{/each}
 		{#if writing !== null}
@@ -93,6 +140,15 @@
 			<p class="flex items-center gap-2 text-[13px] text-text-2">
 				<span class="size-[7px] animate-pulse rounded-full bg-accent-text"></span> writing…
 			</p>
+		{/if}
+		{#if !follow.following}
+			<button
+				type="button"
+				class="sticky bottom-0 flex h-9 shrink-0 items-center gap-1.5 self-center rounded-[12px] border border-border bg-surface px-3.5 text-[13px] font-semibold shadow-[0_2px_0_var(--key-edge)]"
+				onclick={() => follow.down(true)}
+			>
+				<Icon name="arrow-down" /> Latest
+			</button>
 		{/if}
 	</section>
 
@@ -104,7 +160,7 @@
 			maxlength="8000"
 			placeholder={`Message ${status.model}`}
 			aria-label="Message"
-			class="field-sizing-content max-h-40 min-h-[48px] flex-1 resize-none rounded-[16px] border border-border bg-surface px-4 py-3 text-[15px] leading-[1.4] outline-none focus:border-border-strong"
+			class="field-sizing-content max-h-40 min-h-[48px] flex-1 resize-none rounded-[16px] border border-border bg-surface px-4 py-3 text-[16px] leading-[1.4] outline-none focus:border-border-strong"
 		></textarea>
 		<button
 			type="submit"

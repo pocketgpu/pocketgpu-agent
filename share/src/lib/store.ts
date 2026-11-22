@@ -3,7 +3,13 @@
 // bar is cleaned), and the chat. Nothing of it goes anywhere but the computer.
 
 export type Role = 'User' | 'Assistant';
-export type Message = { role: Role; text: string; at: number };
+export type Message = {
+	role: Role;
+	text: string;
+	at: number;
+	/** The answer's speed, when the computer sent it. */
+	speed?: { tokens_per_s: number; ms: number };
+};
 export type Saved = { id: string; fragment: string; key: number[]; claimed: boolean };
 
 const DB = 'pocketgpu-share';

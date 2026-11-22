@@ -1,10 +1,13 @@
 <script lang="ts">
-	import { highlight, type Tone } from './highlight.js';
+	import Icon from './Icon.svelte';
+	import { guess, highlight, type Tone } from './highlight.js';
 
 	// Copied from app/src/lib/chat/Code.svelte (F48): a code block on the black display, its
 	// language and a copy key, coloured for the languages highlight.ts knows.
 	let { lang, code }: { lang: string; code: string } = $props();
-	const pieces = $derived(highlight(code, lang));
+	// A block without a language gets the one its code looks like.
+	const shown = $derived(lang || guess(code));
+	const pieces = $derived(highlight(code, shown));
 	const TONE: Record<Tone, string> = {
 		kw: 'text-code-kw',
 		str: 'text-code-str',
@@ -27,20 +30,21 @@
 
 <section
 	class="overflow-hidden rounded-[16px] border border-display-edge bg-display"
-	aria-label={lang || 'Code'}
+	aria-label={shown || 'Code'}
 >
 	<header class="flex items-center gap-2 border-b border-display-grid py-1 pr-1.5 pl-3.5">
 		<span
 			class="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[1px] text-display-dim uppercase"
 		>
-			{lang || 'code'}
+			{shown || 'code'}
 		</span>
 		<button
 			type="button"
-			class="rounded-[10px] px-2 py-1.5 font-mono text-[10px] tracking-[1px] text-display-dim uppercase active:opacity-60"
+			aria-label={copied ? 'Copied' : 'Copy code'}
+			class="relative flex size-8 shrink-0 items-center justify-center rounded-[10px] text-display-dim after:absolute after:-inset-1.5 active:opacity-60"
 			onclick={copy}
 		>
-			{copied ? 'Copied' : 'Copy'}
+			<Icon name={copied ? 'check' : 'copy'} class={copied ? 'text-display-accent' : ''} />
 		</button>
 	</header>
 	<pre
