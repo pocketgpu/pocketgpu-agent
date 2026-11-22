@@ -25,7 +25,7 @@ fn invisible(c: char) -> bool {
 }
 
 /// Names Windows keeps for devices, with or without an extension (`nul.txt` too).
-fn reserved_on_windows(name: &str) -> bool {
+pub fn reserved_on_windows(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("").trim_end_matches(' ');
     let upper = stem.to_uppercase();
     match upper.as_str() {

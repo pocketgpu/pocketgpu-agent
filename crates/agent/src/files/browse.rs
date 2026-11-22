@@ -53,7 +53,7 @@ pub(super) fn rules(agent: &Agent, root: Root) -> Result<Rules, Error> {
             // Everything the agent's user can read: links in the home folder may lead to
             // other disks; PocketGPU's own folders stay closed.
             rules.outside = true;
-            rules.deny = super::guard::Context::of(agent).agent_dirs;
+            rules.deny = super::guard::context(agent).agent_dirs;
             Ok(rules)
         }
         Root::Offers => Err(error(ErrorCode::Invalid, "offers are opened by their id")),

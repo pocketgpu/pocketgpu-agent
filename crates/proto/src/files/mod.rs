@@ -10,7 +10,7 @@ use crate::{Error, Permission};
 
 mod name;
 
-pub use name::clean_name;
+pub use name::{clean_name, reserved_on_windows};
 
 /// Bytes per `Chunk` frame, both ways.
 pub const CHUNK: usize = 256 * 1024;

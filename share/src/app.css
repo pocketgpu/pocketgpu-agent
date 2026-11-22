@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/instrument-sans';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* The app's "live instrument" look (F46, board 98), copied from app/src/routes/layout.css:
+   warm paper, ink for what you press, one black display; green only for working. This page
+   follows the visitor's system theme, light by default. */
+:root {
+	color-scheme: light;
+	--bg: #eeece5;
+	--surface: #faf9f5;
+	--surface-2: #e3e0d7;
+	--border: #d9d6cc;
+	--border-strong: #bdb9ad;
+	--text: #151513;
+	--text-2: #5f5c54;
+	--text-3: #9a968b;
+	--ink: #151513;
+	--on-ink: #faf9f5;
+	--accent-text: #0e8a3a;
+	--display: #0d0f0d;
+	--display-text: #e8ece4;
+	--display-dim: #7c8478;
+	--display-grid: #20241f;
+	--display-edge: #0d0f0d;
+	--display-accent: #2be06b;
+	--code-text: #e6edf3;
+	--code-kw: #ff7b72;
+	--code-str: #a5d6ff;
+	--code-num: #79c0ff;
+	--code-fn: #d2a8ff;
+	--code-com: #8b949e;
+	--key-edge: #cfcbbf;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		color-scheme: dark;
+		--bg: #000000;
+		--surface: #101010;
+		--surface-2: #1a1a19;
+		--border: #262624;
+		--border-strong: #3a3936;
+		--text: #f1eee6;
+		--text-2: #a8a398;
+		--text-3: #77736a;
+		--ink: #f1eee6;
+		--on-ink: #000000;
+		--accent-text: #2be06b;
+		--display: #000000;
+		--display-grid: #121512;
+		--display-edge: #1f1f1d;
+		--key-edge: #000000;
+	}
+}
+
+@theme inline {
+	--color-bg: var(--bg);
+	--color-surface: var(--surface);
+	--color-surface-2: var(--surface-2);
+	--color-border: var(--border);
+	--color-border-strong: var(--border-strong);
+	--color-text: var(--text);
+	--color-text-2: var(--text-2);
+	--color-text-3: var(--text-3);
+	--color-ink: var(--ink);
+	--color-on-ink: var(--on-ink);
+	--color-accent-text: var(--accent-text);
+	--color-display: var(--display);
+	--color-display-text: var(--display-text);
+	--color-display-dim: var(--display-dim);
+	--color-display-grid: var(--display-grid);
+	--color-display-edge: var(--display-edge);
+	--color-display-accent: var(--display-accent);
+	--color-code-text: var(--code-text);
+	--color-code-kw: var(--code-kw);
+	--color-code-str: var(--code-str);
+	--color-code-num: var(--code-num);
+	--color-code-fn: var(--code-fn);
+	--color-code-com: var(--code-com);
+	--color-key-edge: var(--key-edge);
+	--font-sans: 'Instrument Sans Variable', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+html,
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	min-height: 100dvh;
+}
+
+.key {
+	box-shadow: 0 2px 0 var(--key-edge);
+}

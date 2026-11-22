@@ -36,6 +36,8 @@ pub struct Agent {
     pub screen: crate::screen::Watchers,
     /// Setting up Ollama from a phone (board 87).
     pub ollama_setup: crate::ai::setup::State,
+    /// Shared models (F48): wrong claims and answers being written, in memory.
+    pub shares: Arc<crate::share::Runtime>,
     /// Woken by a local `Shutdown` request.
     pub stop: tokio::sync::Notify,
     /// Unix milliseconds.
@@ -99,6 +101,7 @@ impl Agent {
             shells: Default::default(),
             screen: Default::default(),
             ollama_setup: Default::default(),
+            shares: Default::default(),
             stop: tokio::sync::Notify::new(),
             started_ms: crate::store::db::now_ms(),
             alerts_paused_until: std::sync::atomic::AtomicI64::new(0),

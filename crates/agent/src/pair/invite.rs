@@ -17,6 +17,9 @@ use pocketgpu_proto::pairing::{PairCode, proof, proof_matches};
 pub const JOIN_WITHIN: Duration = Duration::from_secs(15 * 60);
 /// The longest a guest may have: a week.
 pub const MAX_MINUTES: u32 = 7 * 24 * 60;
+/// The most a guest may get. A terminal can't be lent for a while: with it a guest could
+/// pair itself again or remove the owner's devices, so Shell is never lent.
+pub const MAX_LEVEL: Permission = Permission::Control;
 /// Invites not used yet, at most.
 const MAX_OPEN: usize = 8;
 /// Wrong proofs before every open invite stops working (as for pairing codes).
@@ -33,6 +36,8 @@ pub struct Grant {
     pub minutes: u32,
     /// The name of the device that made the invite.
     pub by: String,
+    /// The device that made the invite: it must still have Shell when someone joins.
+    pub by_key: PublicKey,
 }
 
 #[derive(Debug)]
@@ -106,6 +111,11 @@ impl Invites {
         Some(list.remove(at).grant)
     }
 
+    /// Forgets the invites `device` made, once it's removed or can no longer lend the computer.
+    pub fn drop_by(&self, device: &PublicKey) {
+        self.open().invites.retain(|i| i.grant.by_key != *device);
+    }
+
     /// A proof that matched no invite and no pairing code: after [`MAX_WRONG`] of them,
     /// every open invite stops working, so guessing one is as hard as guessing a code.
     pub fn missed(&self, device: &PublicKey) {
@@ -150,6 +160,7 @@ mod tests {
             ends_ms: 1,
             minutes: 60,
             by: "Sam's iPhone".into(),
+            by_key: iroh::SecretKey::from_bytes(&[5; 32]).public(),
         }
     }
 
@@ -190,6 +201,23 @@ mod tests {
         }
         assert!(!invites.any_open());
         assert!(invites.take(&endpoint, &device, &good).is_none());
+    }
+
+    #[test]
+    fn a_removed_inviter_takes_its_invites_along() {
+        let invites = Invites::default();
+        let secret = [7u8; 32];
+        invites.add(secret, grant()).unwrap();
+        let mut other = grant();
+        other.by_key = iroh::SecretKey::from_bytes(&[6; 32]).public();
+        invites.add([8u8; 32], other).unwrap();
+        invites.drop_by(&grant().by_key);
+        let endpoint = iroh::SecretKey::from_bytes(&[1; 32]).public();
+        let device = iroh::SecretKey::from_bytes(&[2; 32]).public();
+        let good = proof(&secret, endpoint.as_bytes(), device.as_bytes());
+        assert!(invites.take(&endpoint, &device, &good).is_none());
+        // The other device's invite still works.
+        assert!(invites.any_open());
     }
 
     #[test]

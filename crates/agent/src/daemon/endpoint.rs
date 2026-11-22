@@ -131,7 +131,12 @@ pub fn serve(agent: Arc<Agent>, endpoint: Endpoint) -> Router {
         )
         .accept(
             alpn::SCREEN,
-            Paired::new(agent, crate::screen::handler::Screen),
+            Paired::new(agent.clone(), crate::screen::handler::Screen),
+        )
+        // Not `Paired`: guests of a shared model are never devices (F48, share/handler.rs).
+        .accept(
+            alpn::MODEL_GUEST,
+            crate::share::handler::ModelGuest::new(agent),
         )
         .spawn()
 }

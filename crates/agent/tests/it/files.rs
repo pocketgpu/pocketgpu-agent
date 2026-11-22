@@ -100,6 +100,32 @@ async fn each_root_needs_its_permission() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn guests_send_to_the_inbox_but_cannot_open_it() {
+    let s = setup().await;
+    std::fs::write(s.dir.path().join("Inbox").join("owner.pdf"), b"private").unwrap();
+    let (g, guest) = phone(&s.h, Permission::Control).await;
+    let id = g.key.public().to_string();
+    let ends = pocketgpu::store::db::now_ms() + 3_600_000;
+    pocketgpu::store::devices::set_expiry(&s.h.agent.db(), &id, Some(ends)).unwrap();
+    assert_eq!(
+        code(guest.files_list(Root::Inbox, "", 0).await),
+        ErrorCode::Forbidden
+    );
+    let dest = s.dir.path().join("got.pdf");
+    let get = guest.download(Root::Inbox, "owner.pdf", &dest, |_, _| {});
+    assert_eq!(code(get.await), ErrorCode::Forbidden);
+    assert_eq!(guest.files_overview().await.unwrap().inbox_files, 0);
+    let src = s.dir.path().join("a.txt");
+    std::fs::write(&src, b"hello").unwrap();
+    guest
+        .upload(&src, "a.txt", [2; 16], |_, _| {})
+        .await
+        .unwrap();
+    // The shared folders stay open to it.
+    assert!(guest.files_list(Root::Shared(0), "", 0).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn off_is_refused_but_says_so() {
     let s = setup().await;
     local(&s.h, Request::SetFiles { on: false }).await;

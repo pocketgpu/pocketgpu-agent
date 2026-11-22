@@ -211,12 +211,12 @@ where
     let outcome = loop {
         tokio::select! {
             _ = &mut expired => {
-                break Some(Response::PairEnded("The code expired. Run `pgpu pair` again.".into()));
+                break Some(Response::PairEnded("The code expired. Run pgpu pair again.".into()));
             }
             ask = asks.recv() => match ask {
                 None => {
                     break Some(Response::PairEnded(
-                        "Too many wrong codes were tried. Run `pgpu pair` again.".into(),
+                        "Too many wrong codes were tried. Run pgpu pair again.".into(),
                     ));
                 }
                 Some(ask) => break decide(&agent, ask, &mut w, &mut from_cli).await?,
@@ -242,6 +242,15 @@ where
     Ok(())
 }
 
+/// What came first while the command line asked about a phone.
+enum Answer {
+    Chose(Option<Permission>),
+    /// `pgpu pair` stopped.
+    NobodyThere,
+    /// The phone stopped waiting.
+    PhoneLeft,
+}
+
 /// Asks the command line about a phone that proved the code, and pairs it if approved.
 async fn decide<W: AsyncWrite + Unpin>(
     agent: &Agent,
@@ -258,19 +267,33 @@ async fn decide<W: AsyncWrite + Unpin>(
     };
     write_frame(w, &Response::PairAsk(question.clone())).await?;
 
+    let mut ask = ask;
     let answer = tokio::time::timeout(APPROVAL_TIMEOUT, async {
         loop {
-            match from_cli.recv().await {
-                Some(Request::PairDecision { permission }) => return Some(permission),
-                Some(_) => continue,
-                None => return None,
+            tokio::select! {
+                msg = from_cli.recv() => match msg {
+                    Some(Request::PairDecision { permission }) => return Answer::Chose(permission),
+                    Some(_) => continue,
+                    None => return Answer::NobodyThere,
+                },
+                // The phone left: its person said the keys differ, or cancelled.
+                () = ask.decision.closed() => return Answer::PhoneLeft,
             }
         }
     })
     .await;
+    let left = || {
+        Ok(Some(Response::PairEnded(format!(
+            "\"{}\" cancelled on the phone, so it was not paired.",
+            question.device_name
+        ))))
+    };
     let permission: Option<Permission> = match answer {
-        Ok(Some(p)) => p,
-        Ok(None) => {
+        Ok(Answer::PhoneLeft) => return left(),
+        // An answer typed just as the phone left still saves nothing.
+        Ok(Answer::Chose(_)) if ask.decision.is_closed() => return left(),
+        Ok(Answer::Chose(p)) => p,
+        Ok(Answer::NobodyThere) => {
             let _ = ask.decision.send(Decision::NoAnswer(NOBODY_THERE));
             return Ok(None);
         }

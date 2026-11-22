@@ -88,3 +88,52 @@ async fn a_setup_under_way_is_not_started_twice() {
     agent.ollama_setup.set(|s| s.phase = SetupPhase::Failed);
     assert!(agent.ollama_setup.begin(), "tried again after it failed");
 }
+
+/// A zip of `apps` (each a fake, unsigned app) made the way Ollama ships it.
+#[cfg(target_os = "macos")]
+fn mac_zip(dir: &Path, apps: &[&str]) -> PathBuf {
+    let src = dir.join("src");
+    for name in apps {
+        let bin = src.join(name).join("Contents/MacOS");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("Ollama"), b"#!/bin/sh\n").unwrap();
+    }
+    let setup = dir.join("ollama-setup");
+    std::fs::create_dir_all(&setup).unwrap();
+    let zip = setup.join("Ollama-darwin.zip");
+    let ok = std::process::Command::new("/usr/bin/ditto")
+        .args(["-c", "-k"])
+        .arg(&src)
+        .arg(&zip)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    zip
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unsigned_mac_app_never_reaches_applications() {
+    let dir = tempfile::tempdir().unwrap();
+    let zip = mac_zip(dir.path(), &["Ollama.app", "Other.app"]);
+    let apps = dir.path().join("Applications");
+    assert!(place_mac_app(&zip, &apps).is_err());
+    assert!(!apps.join("Ollama.app").exists());
+    assert!(!apps.join("Other.app").exists());
+    // Nothing unzipped stays next to the download either.
+    assert!(!zip.with_extension("unzipped").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_broken_mac_zip_leaves_nothing_to_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let zip = mac_zip(dir.path(), &["Ollama.app"]);
+    // Cut short: ditto fails partway.
+    let bytes = std::fs::read(&zip).unwrap();
+    std::fs::write(&zip, &bytes[..bytes.len() / 2]).unwrap();
+    let apps = dir.path().join("Applications");
+    assert!(place_mac_app(&zip, &apps).is_err());
+    assert!(!apps.join("Ollama.app").exists());
+    assert!(!zip.with_extension("unzipped").exists());
+}

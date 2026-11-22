@@ -1,9 +1,11 @@
 //! Model servers besides Ollama (F18, board 86): LM Studio, llama.cpp, vLLM, Jan, or a port
 //! added with `pgpu ai add`. Each is asked for its models at the machine's own 127.0.0.1, all
 //! at once and briefly; phones chat with them through the tunnel (tunnel/mod.rs), and only on
-//! these ports.
+//! these ports, and only while a program of a trusted user listens there (owner.rs).
 
+pub mod owner;
 pub mod setup;
+mod signed;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +81,10 @@ pub async fn servers(agent: &Agent) -> Vec<ModelServer> {
 async fn ask(http: &reqwest::Client, port: u16, given: Option<String>, added: bool) -> ModelServer {
     let url = format!("http://127.0.0.1:{port}/v1/models");
     let answer = async {
+        // Another person's program on the port: as good as down (owner.rs).
+        if owner::refusal(port).is_some() {
+            return None;
+        }
         let res = http.get(&url).timeout(ASK).send().await.ok()?;
         if !res.status().is_success() {
             return None;

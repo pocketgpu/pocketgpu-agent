@@ -111,6 +111,39 @@ const MIGRATIONS: &[M<'static>] = &[
     ),
     // F44: a guest's access ends at this time (Unix ms); NULL for everyone else.
     M::up("ALTER TABLE devices ADD COLUMN expires_ms INTEGER;"),
+    // F48: one model shared with one person; guests are never devices. Counts only, no text.
+    M::up(
+        "
+    CREATE TABLE model_shares (
+        id             INTEGER PRIMARY KEY,
+        server         TEXT NOT NULL,
+        model          TEXT NOT NULL,
+        label          TEXT NOT NULL,
+        from_name      TEXT,
+        secret         BLOB NOT NULL,
+        daily_limit    INTEGER,
+        pause_for_jobs INTEGER NOT NULL DEFAULT 1,
+        ends_ms        INTEGER,
+        claim_until_ms INTEGER NOT NULL,
+        state          TEXT NOT NULL DEFAULT 'waiting',
+        ended_ms       INTEGER,
+        made_by        TEXT NOT NULL,
+        created_ms     INTEGER NOT NULL
+    );
+    CREATE TABLE model_guests (
+        key          TEXT PRIMARY KEY,
+        share_id     INTEGER NOT NULL UNIQUE REFERENCES model_shares(id) ON DELETE CASCADE,
+        claimed_ms   INTEGER NOT NULL,
+        last_seen_ms INTEGER NOT NULL
+    );
+    CREATE TABLE model_usage (
+        share_id INTEGER NOT NULL REFERENCES model_shares(id) ON DELETE CASCADE,
+        day      TEXT NOT NULL,
+        messages INTEGER NOT NULL,
+        PRIMARY KEY (share_id, day)
+    );
+    ",
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {

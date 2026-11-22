@@ -39,10 +39,10 @@ pub enum Decision {
 }
 
 /// `pgpu pair` stopped, or couldn't read typing, before anyone answered.
-pub const NOBODY_THERE: &str = "nobody answered at the computer: `pgpu pair` stopped there or couldn't ask. Run it again in a terminal";
+pub const NOBODY_THERE: &str = "nobody answered at the computer: pgpu pair stopped there or couldn't ask. Run it again in a terminal";
 /// Nobody answered within [`super::APPROVAL_TIMEOUT`].
 pub const NO_ANSWER_IN_TIME: &str =
-    "nobody answered at the computer in 2 minutes. Run `pgpu pair` again";
+    "nobody answered at the computer in 2 minutes. Run pgpu pair again";
 
 impl Decision {
     /// The reply to the phone; `relays` is only read when the phone was allowed.
@@ -60,15 +60,15 @@ impl Decision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
-    #[error("no pairing code is active. Run `pgpu pair` on the machine")]
+    #[error("no pairing code is active. Run pgpu pair on the computer")]
     NoCode,
-    #[error("the code has expired. Run `pgpu pair` again")]
+    #[error("the code has expired. Run pgpu pair again")]
     Expired,
-    #[error("the code was already used. Run `pgpu pair` again")]
+    #[error("the code was already used. Run pgpu pair again")]
     Used,
-    #[error("wrong code. Check the code shown by `pgpu pair`")]
+    #[error("wrong code. Check the code shown by pgpu pair")]
     Wrong,
-    #[error("too many wrong codes. Run `pgpu pair` again")]
+    #[error("too many wrong codes. Run pgpu pair again")]
     Burned,
 }
 

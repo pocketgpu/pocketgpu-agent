@@ -96,6 +96,7 @@ pub async fn run(paths: Paths) -> Result<()> {
     crate::ai::setup::resume(agent.clone());
     // Guests whose time is up lose their access (F44).
     crate::pair::guest::start_sweeper(agent.clone());
+    crate::share::start_sweeper(agent.clone());
     let ipc = tokio::spawn(crate::ipc::listen(agent.clone()));
 
     // A local socket that can't be opened is a failure: the service manager restarts the

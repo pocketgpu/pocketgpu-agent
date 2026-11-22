@@ -77,43 +77,8 @@ fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
-/// Marks a sent file as coming from elsewhere, as a browser does: the Mark of the Web on
-/// Windows, `com.apple.quarantine` on macOS. Best effort.
-pub fn mark_downloaded(path: &Path) {
-    #[cfg(windows)]
-    {
-        let mut stream = path.as_os_str().to_owned();
-        stream.push(":Zone.Identifier");
-        let _ = std::fs::write(
-            std::path::PathBuf::from(stream),
-            "[ZoneTransfer]\r\nZoneId=3\r\n",
-        );
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let value = format!("0081;{secs:x};PocketGPU;");
-        if let Ok(p) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
-            // SAFETY: NUL-terminated path and name; the value's pointer and length come
-            // from one string.
-            unsafe {
-                libc::setxattr(
-                    p.as_ptr(),
-                    c"com.apple.quarantine".as_ptr(),
-                    value.as_ptr().cast(),
-                    value.len(),
-                    0,
-                    0,
-                );
-            }
-        }
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    let _ = path;
-}
+/// Marks a sent file as coming from elsewhere, as a browser does (shared with the app).
+pub use pocketgpu_client::mark_downloaded;
 
 /// The note of a finished send, `<hash in hex>\n<name>\n`, so a device that missed the
 /// reply hears it again. Best effort: without it a retry sends the file again.

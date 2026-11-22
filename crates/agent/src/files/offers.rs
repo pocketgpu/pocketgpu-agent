@@ -1,7 +1,8 @@
 //! Files offered with `pgpu send` (F40 user story 3): kept for 7 days in the `offers`
-//! table, for every device with Control or only the one named. A device saves one by its
-//! id; the file must still have the size and time it had when it was offered. The devices
-//! get a push that names this machine, never the file.
+//! table, for every device with Control or only the one named. A guest (F44) sees offers to
+//! everyone only from when it joined. A device saves one by its id; the file must still have
+//! the size and time it had when it was offered. The devices get a push that names this
+//! machine, never the file.
 
 use std::path::{Path, PathBuf};
 
@@ -101,11 +102,16 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
     })
 }
 
+/// Which offers device `?2` may save: those named for it, and those to everyone; for a guest
+/// (a device with an end time) only those made since it joined.
+const FOR: &str = "(to_device = ?2 OR (to_device IS NULL AND created_ms >= coalesce(
+        (SELECT paired_at FROM devices WHERE device_id = ?2 AND expires_ms IS NOT NULL), 0)))";
+
 /// Offers a device may save now, newest first.
 pub fn for_device(db: &Connection, device: &str, now: i64) -> Result<Vec<Stored>> {
     let mut stmt = db.prepare(&format!(
         "SELECT {COLUMNS} FROM offers
-         WHERE expires_ms > ?1 AND (to_device IS NULL OR to_device = ?2)
+         WHERE expires_ms > ?1 AND {FOR}
          ORDER BY created_ms DESC, id"
     ))?;
     let rows = stmt.query_map(params![now, device], row)?;
@@ -116,11 +122,8 @@ pub fn for_device(db: &Connection, device: &str, now: i64) -> Result<Vec<Stored>
 pub fn find(db: &Connection, id: &str, device: &str, now: i64) -> Result<Option<Stored>> {
     Ok(db
         .query_row(
-            &format!(
-                "SELECT {COLUMNS} FROM offers
-                 WHERE id = ?1 AND expires_ms > ?2 AND (to_device IS NULL OR to_device = ?3)"
-            ),
-            params![id, now, device],
+            &format!("SELECT {COLUMNS} FROM offers WHERE id = ?3 AND expires_ms > ?1 AND {FOR}"),
+            params![now, device, id],
             row,
         )
         .optional()?)
@@ -246,6 +249,43 @@ mod tests {
         assert_eq!(prune(&db, later).unwrap(), 1);
         assert_eq!(count(&db, later).unwrap(), 1);
         assert_eq!(one.to_proto().expires_ms, (2000 + KEEP_MS) as u64);
+    }
+
+    #[test]
+    fn guests_only_see_offers_to_everyone_made_since_they_joined() {
+        let db = open_in_memory().unwrap();
+        let add = |id: &str, paired: i64, ends: Option<i64>| {
+            devices::upsert(&db, id, id, Platform::Android, Permission::Control, None).unwrap();
+            db.execute(
+                "UPDATE devices SET paired_at = ?1 WHERE device_id = ?2",
+                params![paired, id],
+            )
+            .unwrap();
+            devices::set_expiry(&db, id, ends).unwrap();
+        };
+        add("owner", 500, None);
+        add("guest", 2000, Some(10_000));
+        let create = |to, now| {
+            let offer = Stored::new(Path::new("/x/a.bin"), "a.bin", 1, 9, to, now).unwrap();
+            insert(&db, &offer).unwrap();
+            offer.id
+        };
+        let before = create(None, 1000);
+        let after = create(None, 3000);
+        let named = create(Some("guest"), 1500);
+        let ids = |d: &str| -> Vec<String> {
+            for_device(&db, d, 4000)
+                .unwrap()
+                .into_iter()
+                .map(|o| o.id)
+                .collect()
+        };
+        assert_eq!(ids("owner"), vec![after.clone(), before.clone()]);
+        assert_eq!(ids("guest"), vec![after.clone(), named.clone()]);
+        assert!(find(&db, &before, "guest", 4000).unwrap().is_none());
+        assert!(find(&db, &after, "guest", 4000).unwrap().is_some());
+        assert!(find(&db, &named, "guest", 4000).unwrap().is_some());
+        assert!(find(&db, &before, "owner", 4000).unwrap().is_some());
     }
 
     #[test]

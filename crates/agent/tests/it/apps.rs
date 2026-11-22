@@ -60,8 +60,13 @@ fn refusal<T: std::fmt::Debug>(r: Result<T, ClientError>) -> (ErrorCode, String)
 }
 
 async fn get(addr: std::net::SocketAddr, path: &str) -> String {
+    get_as(addr, path, &format!("localhost:{}", addr.port())).await
+}
+
+/// A request naming `host`, as a browser on another page's address would.
+async fn get_as(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(format!("GET {path} HTTP/1.0\r\n\r\n").as_bytes())
+    s.write_all(format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes())
         .await
         .unwrap();
     let mut out = String::new();
@@ -138,6 +143,14 @@ async fn a_browser_reaches_the_app_through_the_local_address() {
         let page = get(fwd.local, path).await;
         assert!(page.ends_with(path), "{page}");
     }
+    // A web page that pointed its own name at 127.0.0.1 (DNS rebinding) is turned away.
+    let rebound = get_as(
+        fwd.local,
+        "/",
+        &format!("evil.example:{}", fwd.local.port()),
+    )
+    .await;
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
 
     // Several connections, one audit entry (and one notice).
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
@@ -211,10 +224,14 @@ async fn an_open_connection_ends_when_full_control_is_taken_away() {
     let fwd = m.forward_app(port, Some(0)).await.unwrap();
 
     let mut s = TcpStream::connect(fwd.local).await.unwrap();
-    s.write_all(b"hello").await.unwrap();
-    let mut buf = [0u8; 5];
+    let head = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+        fwd.local.port()
+    );
+    s.write_all(head.as_bytes()).await.unwrap();
+    let mut buf = vec![0u8; head.len()];
     s.read_exact(&mut buf).await.unwrap();
-    assert_eq!(&buf, b"hello");
+    assert_eq!(buf, head.as_bytes());
 
     // Lowered to Run actions: the open connection is closed within a few seconds.
     pocketgpu::store::devices::set_permission(

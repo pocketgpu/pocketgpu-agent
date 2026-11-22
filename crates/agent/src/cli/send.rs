@@ -69,8 +69,8 @@ pub fn render(o: &Offered, now_ms: i64) -> String {
     };
     if to.is_empty() {
         return format!(
-            "Offered {name} ({}) {period}, but no device can save it yet: pair a phone with \
-             Control first (pgpu pair).\n",
+            "Offered {name} ({}) {period}, but no device can save it yet: pair a phone and \
+             let it run actions first (pgpu pair).\n",
             size(*bytes)
         );
     }

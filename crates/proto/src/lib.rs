@@ -14,6 +14,7 @@ pub mod msg;
 pub mod pairing;
 pub mod push;
 pub mod screen;
+pub mod share;
 pub mod shell;
 pub mod tunnel;
 pub mod types;

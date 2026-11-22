@@ -31,6 +31,7 @@ mod power;
 mod revoke;
 mod screen;
 mod settings;
+mod shares;
 mod shell;
 mod sync;
 mod tunnel;

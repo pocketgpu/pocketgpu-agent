@@ -24,6 +24,8 @@ pub async fn run(paths: &Paths, json: bool, preset: Option<Permission>) -> Resul
     let live = !json && std::io::stdout().is_terminal();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut deadline: Option<Instant> = None;
+    // This computer's key, for a phone found on the Wi-Fi to compare.
+    let mut machine_key = String::new();
     loop {
         tokio::select! {
             reply = replies.recv() => {
@@ -33,6 +35,7 @@ pub async fn run(paths: &Paths, json: bool, preset: Option<Permission>) -> Resul
                 match reply {
                     Response::PairCode(info) => {
                         show_code(&info, json)?;
+                        machine_key.clone_from(&info.agent_fingerprint);
                         deadline = Some(Instant::now() + Duration::from_secs(info.expires_in_s.into()));
                     }
                     Response::PairAsk(ask) => {
@@ -46,7 +49,15 @@ pub async fn run(paths: &Paths, json: bool, preset: Option<Permission>) -> Resul
                                 eprintln!("Pairing {} as {}.", describe(&ask), p.as_str());
                                 Some(p)
                             }
-                            None => prompt(ask, shell_enabled(paths).await).await?,
+                            None => {
+                                let asking = prompt(ask, shell_enabled(paths).await, &machine_key);
+                                tokio::pin!(asking);
+                                tokio::select! {
+                                    answer = &mut asking => answer?,
+                                    // The phone stopped waiting while the question was up.
+                                    reply = replies.recv() => ended_while_asking(reply, json),
+                                }
+                            }
                         };
                         write_frame(&mut w, &Request::PairDecision { permission }).await?;
                     }
@@ -104,7 +115,7 @@ fn show_code(info: &PairCodeInfo, json: bool) -> Result<()> {
     println!("{qr}");
     println!("  Scan with the PocketGPU app");
     println!("  or enter code {}", info.code);
-    println!("  Machine key {}", info.agent_fingerprint);
+    println!("  Computer key {}", info.agent_fingerprint);
     // The QR code opens the app, not a web page: someone without it needs to know where to
     // get it before the code expires.
     println!("  No app yet? It's in beta: pocketgpu.app/#beta");
@@ -152,49 +163,112 @@ fn menu(ask: &PairAsk, shell_on: Option<bool>, user: &str) -> String {
     } else {
         ""
     };
-    let from = if ask.from_lan {
-        " from this Wi-Fi, without a code"
+    // A Wi-Fi ask already showed the keys and the name, and got a yes: Enter now means
+    // Control, not no, so say the yes was heard.
+    let head = if ask.from_lan {
+        "  Allowed. Now choose what it can do:".to_string()
     } else {
-        ""
+        format!(
+            "  Phone key  {key}  (check it matches the phone's screen)\n\
+             \x20 \"{name}\" ({platform}) wants to connect. What can it do on this computer?",
+            key = ask.device_fingerprint,
+            name = ask.device_name,
+            platform = platform(ask),
+        )
     };
     format!(
-        "  Phone key  {key}  (check it matches the phone's screen)\n\
-         \x20 \"{name}\" ({platform}) wants to connect{from}. What can it do on this machine?\n\
+        "{head}\n\
          \x20   v  View     see stats, jobs and alerts\n\
          \x20   c  Control  View, plus run quick actions, stop jobs and kill processes\n\
          \x20   s  Shell    Control, plus a terminal: it can run any command as {user}{shell_off}\n\
          \x20   d  Deny\n",
+    )
+}
+
+/// A phone found on the Wi-Fi proved no code, and anyone there can ask: both keys, then a
+/// question where Enter means no (F47).
+fn lan_question(ask: &PairAsk, machine_key: &str) -> String {
+    format!(
+        "  \"{name}\" ({platform}) wants to connect from this Wi-Fi, without a code.\n\
+         \x20 Phone key    {key}  (check it matches the phone's screen)\n\
+         \x20 Computer key {machine_key}  (the phone asks you to check this one)\n\
+         \x20 If you didn't just tap Connect on your phone, say no.\n",
         key = ask.device_fingerprint,
         name = ask.device_name,
         platform = platform(ask),
     )
 }
 
-/// Asks on the terminal; Enter picks Control, the usual choice. With no input to read (a
-/// closed pipe, or started without a terminal) it stops with why: the phone then hears that
-/// nobody could answer, not a "no".
-async fn prompt(ask: PairAsk, shell_on: Option<bool>) -> Result<Option<Permission>> {
+/// Asks on the terminal; Enter picks Control, the usual choice. A Wi-Fi ask first gets
+/// "Allow it? [y/N]", where Enter is no. With no input to read (a closed pipe, or started
+/// without a terminal) it stops with why: the phone then hears that nobody could answer, not
+/// a "no".
+async fn prompt(
+    ask: PairAsk,
+    shell_on: Option<bool>,
+    machine_key: &str,
+) -> Result<Option<Permission>> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "this user".into());
     let menu = menu(&ask, shell_on, &user);
+    let question = ask.from_lan.then(|| lan_question(&ask, machine_key));
     tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin();
-        eprint!("{menu}");
-        loop {
-            eprint!("  Choose v, c, s or d [c]: ");
+        let read = || -> Result<String> {
             std::io::stderr().flush()?;
             let mut line = String::new();
             if stdin.read_line(&mut line)? == 0 {
                 eprintln!();
                 bail!(CANT_ASK);
             }
-            if let Some(answer) = parse_answer(&line) {
+            Ok(line)
+        };
+        if let Some(question) = question {
+            eprint!("{question}");
+            loop {
+                eprint!("  Allow it? [y/N]: ");
+                match parse_yes(&read()?) {
+                    Some(true) => break,
+                    Some(false) => return Ok(None),
+                    None => {}
+                }
+            }
+        }
+        eprint!("{menu}");
+        loop {
+            eprint!("  Choose v, c, s or d [c]: ");
+            if let Some(answer) = parse_answer(&read()?) {
                 return Ok(answer);
             }
         }
     })
     .await?
+}
+
+/// The phone stopped waiting while the question was up (its person said the keys differ, or
+/// cancelled): say why and stop. Exits at once, since the question still waits on typing.
+fn ended_while_asking(reply: Option<Response>, json: bool) -> ! {
+    let why = match reply {
+        Some(Response::PairEnded(why) | Response::Error(why)) => why,
+        _ => "the agent stopped while pairing".into(),
+    };
+    if json {
+        println!("{}", serde_json::json!({ "error": why }));
+    } else {
+        eprintln!();
+        eprintln!("error: {why}");
+    }
+    std::process::exit(1)
+}
+
+/// The Wi-Fi question: only a yes allows, and Enter alone is no.
+fn parse_yes(line: &str) -> Option<bool> {
+    match line.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "" | "n" | "no" | "d" | "deny" => Some(false),
+        _ => None,
+    }
 }
 
 const CANT_ASK: &str = "can't ask here: nothing can be typed into this command, so the phone \
@@ -241,6 +315,15 @@ mod tests {
     }
 
     #[test]
+    fn on_the_wifi_question_enter_means_no() {
+        assert_eq!(parse_yes("\n"), Some(false));
+        assert_eq!(parse_yes("N"), Some(false));
+        assert_eq!(parse_yes(" y \n"), Some(true));
+        assert_eq!(parse_yes("Yes"), Some(true));
+        assert_eq!(parse_yes("c"), None);
+    }
+
+    #[test]
     fn the_menu_says_what_each_level_allows() {
         let ask = PairAsk {
             device_name: "Pixel 9".into(),
@@ -259,9 +342,12 @@ mod tests {
             from_lan: true,
             ..ask
         };
-        assert!(
-            super::menu(&lan, Some(true), "kami")
-                .contains("wants to connect from this Wi-Fi, without a code")
-        );
+        let question = lan_question(&lan, "77aa 0b12 c3d4 e5f6");
+        assert!(question.contains("\"Pixel 9\" (Android) wants to connect from this Wi-Fi"));
+        assert!(question.contains("Phone key    a91c 40de 77b2 19aa"));
+        assert!(question.contains("Computer key 77aa 0b12 c3d4 e5f6"));
+        // The menu after a yes doesn't repeat what the question showed.
+        let after = super::menu(&lan, Some(true), "kami");
+        assert!(after.starts_with("  Allowed. Now choose what it can do:\n"));
     }
 }

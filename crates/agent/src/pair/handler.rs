@@ -68,6 +68,19 @@ async fn serve(
         .invites
         .take(local, &device, &req.secret_proof)
     {
+        if let Err(why) = super::guest::may_join(agent, &grant) {
+            if let Err(e) = audit::record(
+                &agent.db(),
+                &device.to_string(),
+                Event::Refused,
+                "pair",
+                why,
+            ) {
+                tracing::warn!("could not write audit entry: {e}");
+            }
+            let reply = Response::Error(Error::new(ErrorCode::Forbidden, why));
+            return finish(conn, &mut send, &reply).await;
+        }
         let reply = match super::guest::join(agent, device, &req, &grant) {
             Ok(()) => {
                 write_frame(
@@ -135,21 +148,24 @@ async fn serve(
     let reply = if asks.send(ask).await.is_err() {
         Response::Error(Error::new(
             ErrorCode::Busy,
-            "pairing was cancelled on the machine",
+            "pairing was cancelled on the computer",
         ))
     } else {
         // Ends when the person decides, or when `pgpu pair` stops (no answer, not a "no").
-        decided
-            .await
-            .unwrap_or(Decision::NoAnswer(NOBODY_THERE))
-            .reply(|| {
-                agent
-                    .config
-                    .read()
-                    .expect("config lock poisoned")
-                    .relays
-                    .clone()
-            })
+        // A phone that leaves first (its person said the keys differ, or cancelled) drops
+        // the question: `pgpu pair` then stops asking and saves nothing.
+        let decision = tokio::select! {
+            d = decided => d.unwrap_or(Decision::NoAnswer(NOBODY_THERE)),
+            _ = conn.closed() => return Ok(()),
+        };
+        decision.reply(|| {
+            agent
+                .config
+                .read()
+                .expect("config lock poisoned")
+                .relays
+                .clone()
+        })
     };
     finish(conn, &mut send, &reply).await
 }

@@ -1,7 +1,8 @@
 //! Set up Ollama from a phone (board 87.1, 87.2): Ollama's own build for this computer, set up
 //! as the user with no admin password, then started. Linux unpacks the server into PocketGPU's
 //! folder and the agent runs it, and starts it again with the agent; a Mac gets Ollama.app in
-//! ~/Applications; Windows runs Ollama's own installer, which installs for this user. Shell
+//! ~/Applications; Windows runs Ollama's own installer, which installs for this user. On a Mac
+//! and Windows, Ollama's signature is checked before anything downloaded runs (signed.rs). Shell
 //! only, audited, and the computer shows a notice (notices/). The phone reads the progress kept
 //! here (`tunnel::ToAgent::SetUpOllama`).
 
@@ -135,6 +136,10 @@ fn addr(agent: &Agent) -> String {
 
 async fn run(agent: &Arc<Agent>) -> Result<(), String> {
     let addr = addr(agent);
+    // Another person's program on Ollama's port isn't Ollama being there already.
+    if let Some(why) = super::port_of(&addr).ok().and_then(super::owner::refusal) {
+        return Err(why);
+    }
     if crate::collect::ollama::version(&addr).await.is_some() {
         return Ok(());
     }
@@ -173,10 +178,12 @@ async fn fetch(agent: &Agent, builds: &[Build], home: &Path) -> Result<Build, St
     let (build, file) = download(agent, builds, &dir).await?;
     agent.ollama_setup.set(|s| s.phase = SetupPhase::Unpack);
     let (b, h) = (build.clone(), home.to_path_buf());
-    tokio::task::spawn_blocking(move || install(&b, &file, &h))
+    let installed = tokio::task::spawn_blocking(move || install(&b, &file, &h))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string());
+    // Also when it failed: a download that wasn't Ollama's doesn't stay.
     let _ = std::fs::remove_dir_all(&dir);
+    installed??;
     Ok(build)
 }
 
@@ -253,24 +260,53 @@ fn install(build: &Build, file: &Path, home: &Path) -> Result<(), String> {
             unpack(zst, home)
         }
         Build::Tgz(_) => unpack(flate2::read::GzDecoder::new(open()?), home),
-        Build::MacApp(_) => {
-            let apps = home_dir()?.join("Applications");
-            std::fs::create_dir_all(&apps).map_err(|e| e.to_string())?;
-            let _ = std::fs::remove_dir_all(apps.join("Ollama.app"));
-            run_tool(
-                std::process::Command::new("/usr/bin/ditto")
-                    .args(["-x", "-k"])
-                    .arg(file)
-                    .arg(&apps),
-            )
+        Build::MacApp(_) => place_mac_app(file, &home_dir()?.join("Applications")),
+        Build::WindowsSetup(_) => {
+            #[cfg(windows)]
+            super::signed::windows_installer(file)?;
+            run_tool(std::process::Command::new(file).args([
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/SP-",
+            ]))
         }
-        Build::WindowsSetup(_) => run_tool(std::process::Command::new(file).args([
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/SP-",
-        ])),
     }
+}
+
+/// Unzips next to the download, checks Ollama.app there and only then moves it into `apps`.
+/// A zip that fails partway, holds other apps or isn't Ollama's leaves nothing to be opened.
+fn place_mac_app(file: &Path, apps: &Path) -> Result<(), String> {
+    let staged = file.with_extension("unzipped");
+    let _ = std::fs::remove_dir_all(&staged);
+    let placed = (|| {
+        let ditto = |from: &Path, to: &Path, unzip: bool| {
+            let mut c = std::process::Command::new("/usr/bin/ditto");
+            if unzip {
+                c.args(["-x", "-k"]);
+            }
+            run_tool(c.arg(from).arg(to))
+        };
+        ditto(file, &staged, true)?;
+        let app = staged.join("Ollama.app");
+        #[cfg(target_os = "macos")]
+        super::signed::mac_app(&app)?;
+        std::fs::create_dir_all(apps).map_err(|e| e.to_string())?;
+        let to = apps.join("Ollama.app");
+        let _ = std::fs::remove_dir_all(&to);
+        if std::fs::rename(&app, &to).is_ok() {
+            return Ok(());
+        }
+        // Another disk: copied, and checked again where it now is.
+        let copied = ditto(&app, &to, false);
+        #[cfg(target_os = "macos")]
+        let copied = copied.and_then(|()| super::signed::mac_app(&to));
+        copied.inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&to);
+        })
+    })();
+    let _ = std::fs::remove_dir_all(&staged);
+    placed
 }
 
 /// A tar archive into a fresh `home`.

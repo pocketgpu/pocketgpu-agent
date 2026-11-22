@@ -12,6 +12,9 @@
 #   $env:PGPU_DOWNLOAD_URL = 'url'    a mirror holding the release files
 
 $ErrorActionPreference = 'Stop'
+# Public key for the release signature (the same as RELEASE_PUBKEY in the agent), checked when
+# minisign is installed, as the Linux and macOS installer does.
+$script:MinisignPubkey = 'RWQFc2OekDAK+RAphy78vna45XDYb5pbU3qu7B4d8ERcuzY82sYtkwV4'
 $ProgressPreference = 'SilentlyContinue'
 # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -122,6 +125,15 @@ function Test-Checksum($tmp, $file) {
     if ($want -ne $got) { Fail "checksum mismatch for $file; the download is damaged or was changed" }
 }
 
+# Checks the minisign signature on SHA256SUMS when minisign is installed; $false when it isn't.
+function Test-Signature($base, $tmp) {
+    if (-not (Get-Command minisign.exe -ErrorAction SilentlyContinue)) { return $false }
+    Save-File "$base/SHA256SUMS.minisig" (Join-Path $tmp 'SHA256SUMS.minisig') -Quiet
+    & minisign.exe -Vqm (Join-Path $tmp 'SHA256SUMS') -P $script:MinisignPubkey | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail 'the release signature is not valid' }
+    return $true
+}
+
 function Ask($question) {
     if (-not [Environment]::UserInteractive) { return $false }
     Write-Host ''
@@ -220,9 +232,11 @@ function Install-PocketGPU {
         Save-File "$base/$file" (Join-Path $tmp $file)
 
         Start-Step 'Verifying the download'
+        $signed = Test-Signature $base $tmp
         Test-Checksum $tmp $file
-        # The signature on SHA256SUMS is checked by `pgpu update`; PowerShell has no minisign.
-        Done 'SHA-256 matches the release'
+        # Without minisign the signature is checked only by later `pgpu update`s.
+        if ($signed) { Done 'SHA-256 matches, signature valid' }
+        else { Done 'SHA-256 matches, signature not checked (install minisign to check it)' }
 
         Start-Step 'Installing'
         tar.exe -xzf (Join-Path $tmp $file) -C $tmp

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, SendStream};
+use pocketgpu_proto::share::ModelServerRef;
 use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone, permission_for, server_permission_for};
 use pocketgpu_proto::{Error, ErrorCode, Permission, read_frame, write_frame};
 
@@ -73,15 +74,7 @@ async fn forward(
                 server_permission_for(method, &path).ok_or_else(|| refused(method, &path))?;
             let name = crate::ai::name(agent, port);
             agent.require(peer, needed, &format!("{name} {path}"))?;
-            if !crate::ai::allowed(agent, port) {
-                return Err(Error::new(
-                    ErrorCode::Invalid,
-                    format!(
-                        "PocketGPU doesn't talk to port {port}; add it at the computer with: pgpu ai add {port}"
-                    ),
-                ));
-            }
-            let base = format!("http://127.0.0.1:{port}");
+            let (base, name) = base_for(agent, ModelServerRef::Port(port))?;
             let call = Call {
                 method,
                 path: &path,
@@ -162,13 +155,49 @@ async fn ollama(
             "requested",
         );
     }
-    let base = agent
-        .config
-        .read()
-        .expect("config lock poisoned")
-        .ollama_addr
-        .clone();
-    pipe(http, &base, call, send, "Ollama").await
+    let (base, name) = base_for(agent, ModelServerRef::Ollama)?;
+    pipe(http, &base, call, send, &name).await
+}
+
+/// Where a model server on this machine answers, and its name, after the checks every
+/// caller gets: another server only on a known or added port, and Ollama or any other only
+/// while a program of a trusted user listens there, so no one else gets the chats. Phones
+/// through the tunnel and guests of a shared model (F48) both come through here.
+pub(crate) fn base_for(agent: &Agent, server: ModelServerRef) -> Result<(String, String), Error> {
+    match server {
+        ModelServerRef::Ollama => {
+            let base = agent
+                .config
+                .read()
+                .expect("config lock poisoned")
+                .ollama_addr
+                .clone();
+            if let Some(why) = crate::ai::port_of(&base)
+                .ok()
+                .and_then(crate::ai::owner::refusal)
+            {
+                return Err(Error::new(ErrorCode::Forbidden, why));
+            }
+            Ok((base, "Ollama".into()))
+        }
+        ModelServerRef::Port(port) => {
+            if !crate::ai::allowed(agent, port) {
+                return Err(Error::new(
+                    ErrorCode::Invalid,
+                    format!(
+                        "PocketGPU doesn't talk to port {port}; add it at the computer with: pgpu ai add {port}"
+                    ),
+                ));
+            }
+            if let Some(why) = crate::ai::owner::refusal(port) {
+                return Err(Error::new(ErrorCode::Forbidden, why));
+            }
+            Ok((
+                format!("http://127.0.0.1:{port}"),
+                crate::ai::name(agent, port),
+            ))
+        }
+    }
 }
 
 /// Sends the request to the server at `base` and streams its answer back to the phone.

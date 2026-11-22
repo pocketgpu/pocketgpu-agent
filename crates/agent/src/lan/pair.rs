@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,8 @@ const DIRECT_WAIT: Duration = Duration::from_secs(2);
 #[derive(Debug, Default)]
 pub struct Gate {
     inner: Mutex<GateState>,
+    /// Tests on one computer ask over loopback; the agent itself never allows it.
+    loopback: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +55,12 @@ pub enum Closed {
 impl Gate {
     fn state(&self) -> std::sync::MutexGuard<'_, GateState> {
         self.inner.lock().expect("lan gate poisoned")
+    }
+
+    /// Lets a phone on this same computer ask over loopback, for tests only: someone here
+    /// already has `pgpu pair`.
+    pub fn allow_loopback_for_tests(&self) {
+        self.loopback.store(true, Ordering::Relaxed);
     }
 
     /// Takes the one place for an ask. Release it with [`Gate::done`].
@@ -84,14 +93,16 @@ impl Gate {
     }
 }
 
-/// Private, link-local and loopback addresses: the same network (or this computer), not the
-/// internet. Shared address space (100.64/10, used by carriers and some VPNs) doesn't count.
+/// Private and link-local addresses: the same network, not the internet. Loopback doesn't
+/// count (anyone on this computer could ask, and its owner has `pgpu pair`), nor shared
+/// address space (100.64/10, carriers and Tailscale) or Tailscale's own IPv6 range.
 pub fn is_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => {
-            let first = v6.segments()[0];
-            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+            let s = v6.segments();
+            let tailscale = s[..3] == [0xfd7a, 0x115c, 0xa1e0];
+            !tailscale && ((s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80)
         }
     }
 }
@@ -115,7 +126,8 @@ impl ProtocolHandler for LanPairHandler {
             conn.close(403u32.into(), b"not waiting for a phone");
             return Ok(());
         }
-        if !direct_and_local(&conn).await {
+        let loopback = self.agent.pairing.lan.loopback.load(Ordering::Relaxed);
+        if !direct_and_local(&conn, loopback).await {
             tracing::info!(remote = %device.fmt_short(), "refused Wi-Fi pairing: not a direct local path");
             conn.close(403u32.into(), b"not on this network");
             return Ok(());
@@ -127,14 +139,15 @@ impl ProtocolHandler for LanPairHandler {
     }
 }
 
-/// Whether the connection runs over a direct path to a local address.
-async fn direct_and_local(conn: &Connection) -> bool {
+/// Whether the connection runs over a direct path to a local address (or loopback, in tests).
+async fn direct_and_local(conn: &Connection, loopback: bool) -> bool {
     let start = Instant::now();
     loop {
         let paths = conn.paths();
         let selected = paths.iter().find(|p| p.is_selected());
         if let Some(p) = selected {
-            return matches!(p.remote_addr(), iroh::TransportAddr::Ip(a) if is_local(a.ip()));
+            return matches!(p.remote_addr(), iroh::TransportAddr::Ip(a)
+                if is_local(a.ip()) || (loopback && a.ip().is_loopback()));
         }
         if start.elapsed() >= DIRECT_WAIT {
             return false;
@@ -218,7 +231,12 @@ async fn ask(
         finish(conn, send, &reply).await?;
         return Ok(false);
     }
-    let decision = decided.await.unwrap_or(Decision::NoAnswer(NOBODY_THERE));
+    // A phone that leaves first (its person said the keys differ, or cancelled) drops the
+    // question: `pgpu pair` then stops asking and saves nothing.
+    let decision = tokio::select! {
+        d = decided => d.unwrap_or(Decision::NoAnswer(NOBODY_THERE)),
+        _ = conn.closed() => return Ok(false),
+    };
     let paired = matches!(decision, Decision::Allow(_));
     if !paired {
         {
@@ -306,11 +324,19 @@ mod tests {
             "169.254.1.1",
             "fe80::1",
             "fd12::1",
+            "::ffff:192.168.1.20",
         ] {
             assert!(is_local(ip.parse().unwrap()), "{ip}");
         }
-        assert!(is_local("127.0.0.1".parse().unwrap()));
-        for ip in ["8.8.8.8", "100.64.0.1", "2001:db8::1"] {
+        for ip in [
+            "8.8.8.8",
+            "100.64.0.1",
+            "2001:db8::1",
+            "127.0.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+            "fd7a:115c:a1e0::1",
+        ] {
             assert!(!is_local(ip.parse().unwrap()), "{ip}");
         }
     }

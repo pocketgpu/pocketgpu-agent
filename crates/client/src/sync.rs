@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use pocketgpu_proto::files::{Kind, Root};
+use pocketgpu_proto::files::{Kind, Root, reserved_on_windows};
 use serde::{Deserialize, Serialize};
 
 use crate::{ClientError, Machine};
@@ -80,19 +80,68 @@ pub fn needed(remote: &[Remote], known: &Known) -> Vec<Remote> {
         .collect()
 }
 
-/// `a/b.txt` as a relative path, or `None` for anything that could leave the folder or
-/// lands in PocketGPU's own partial folder.
+/// How many files [`needed`] never gets because their names can't be saved here.
+pub fn unsavable(remote: &[Remote]) -> usize {
+    remote.iter().filter(|r| safe(&r.path).is_none()).count()
+}
+
+/// One look at a shared folder: its files, the folders too deep to look in, and whether it
+/// stopped at [`MAX_FILES`].
+#[derive(Debug, Clone, Default)]
+pub struct Scan {
+    pub files: Vec<Remote>,
+    pub deep: usize,
+    pub full: bool,
+}
+
+/// `a/b.txt` as a relative path, or `None` for anything that could leave the folder, be
+/// a drive or a device on Windows, or land in PocketGPU's own partial folder.
 pub fn safe(path: &str) -> Option<PathBuf> {
-    let p = Path::new(path);
     let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::Normal(n) => out.push(n),
-            _ => return None,
+    for part in path.split('/') {
+        if !savable(part, cfg!(windows)) {
+            return None;
         }
+        out.push(part);
     }
-    let first = out.components().next()?;
-    (first.as_os_str() != PARTIAL).then_some(out)
+    out.components()
+        .all(|c| matches!(c, Component::Normal(_)))
+        .then_some(out)
+}
+
+/// Whether one part of a path can be saved as itself here. Everywhere: not empty, `.` or
+/// `..`; no NUL, backslash, control character or direction override (with U+202E,
+/// `photo` + U+202E + `gpj.exe` shows as `photoexe.jpg`); no leading dot (hidden names:
+/// `.pgpu-partial`, `.ssh`; shared folders never list them) and no drive (`C:x`). On
+/// Windows also none of `<>:"|?*` (`a:b` is a stream), no trailing dot or space and no
+/// device name (`CON`, `nul.txt`). Other names Macs and Linux take as they are, so what
+/// synced to them before still does; the disk refuses a name that is too long.
+fn savable(part: &str, windows: bool) -> bool {
+    let b = part.as_bytes();
+    let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let everywhere = !part.is_empty()
+        && !part.starts_with('.')
+        && !drive
+        && !part.chars().any(|c| {
+            c == '\\'
+                || c.is_control()
+                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        });
+    everywhere
+        && !(windows
+            && (part.contains(['<', '>', ':', '"', '|', '?', '*'])
+                || part.ends_with(['.', ' '])
+                || reserved_on_windows(part)))
+}
+
+/// `dir` joined with a checked relative path, or `None` when the result isn't inside it
+/// (on Windows, joining a path with a drive replaces `dir`, and `name:x` is a hidden stream).
+fn within(dir: &Path, rel: &Path) -> Option<PathBuf> {
+    if cfg!(windows) && rel.as_os_str().to_string_lossy().contains(':') {
+        return None;
+    }
+    let p = dir.join(rel);
+    p.starts_with(dir).then_some(p)
 }
 
 /// Where a file goes in `dir`: its own path, or `name (2).ext` beside it when what is there
@@ -127,7 +176,13 @@ impl Machine {
     /// Every file in a shared folder and its folders, at most [`MAX_FILES`] and
     /// [`MAX_DEPTH`] deep.
     pub async fn sync_scan(&self, root: Root) -> Result<Vec<Remote>, ClientError> {
+        Ok(self.sync_look(root).await?.files)
+    }
+
+    /// [`Machine::sync_scan`], also saying what it left out.
+    pub async fn sync_look(&self, root: Root) -> Result<Scan, ClientError> {
         let mut out = Vec::new();
+        let mut deep = 0;
         let mut folders = vec![(String::new(), 0usize)];
         while let Some((dir, depth)) = folders.pop() {
             let mut offset = 0;
@@ -141,7 +196,7 @@ impl Machine {
                     };
                     match e.kind {
                         Kind::Folder if depth + 1 < MAX_DEPTH => folders.push((path, depth + 1)),
-                        Kind::Folder => {}
+                        Kind::Folder => deep += 1,
                         _ => out.push(Remote {
                             path,
                             size: e.size,
@@ -149,7 +204,11 @@ impl Machine {
                         }),
                     }
                     if out.len() >= MAX_FILES {
-                        return Ok(out);
+                        return Ok(Scan {
+                            files: out,
+                            deep,
+                            full: true,
+                        });
                     }
                 }
                 match next {
@@ -158,7 +217,11 @@ impl Machine {
                 }
             }
         }
-        Ok(out)
+        Ok(Scan {
+            files: out,
+            deep,
+            full: false,
+        })
     }
 
     /// Gets one file into `dir`, carrying on from a partial copy, and returns where it
@@ -173,7 +236,8 @@ impl Machine {
     ) -> Result<(PathBuf, u64), ClientError> {
         let rel = safe(&file.path)
             .ok_or_else(|| ClientError::Connect(format!("{} isn't a safe name", file.path)))?;
-        let partial = dir.join(PARTIAL).join(&rel);
+        let outside = || ClientError::Connect(format!("{} leads outside the folder", file.path));
+        let partial = within(&dir.join(PARTIAL), &rel).ok_or_else(outside)?;
         if let Some(parent) = partial.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -194,6 +258,9 @@ impl Machine {
             Err(e) => return Err(e),
         };
         let dest = target(dir, &rel, landed);
+        if !dest.starts_with(dir) {
+            return Err(outside());
+        }
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -202,6 +269,8 @@ impl Machine {
         tokio::fs::rename(&partial, &dest)
             .await
             .map_err(ClientError::File)?;
+        // From another computer: SmartScreen and Gatekeeper ask before it runs.
+        crate::mark_downloaded(&dest);
         Ok((dest, got.size))
     }
 }
@@ -239,8 +308,88 @@ mod tests {
         assert!(safe(".pgpu-partial/x").is_none());
         assert!(safe("").is_none());
         assert_eq!(safe("runs/a.pt"), Some(PathBuf::from("runs/a.pt")));
-        let remote = [r("../x", 1, 1)];
+        let remote = [r("../x", 1, 1), r("a.pt", 1, 1)];
+        assert_eq!(needed(&remote, &Known::default()), vec![r("a.pt", 1, 1)]);
+        assert_eq!(unsavable(&remote), 1);
+    }
+
+    /// Whether every part of `path` passes, as Windows (`true`) or Macs and Linux see it.
+    fn passes(path: &str, windows: bool) -> bool {
+        path.split('/').all(|p| savable(p, windows))
+    }
+
+    #[test]
+    fn no_drives_streams_or_devices() {
+        // Refused everywhere. On Windows `C:x` is a path on drive C:, not a file in the folder.
+        for bad in [
+            "a/C:x",
+            "a/D:x",
+            "C:x",
+            "d:/x",
+            r"a\..\..\x",
+            "a/x\0y",
+            "a/x\ny",
+            "a//b",
+            "a/./b",
+            ".ssh/authorized_keys",
+            "a/.zshrc",
+            "a/photo\u{202E}gpj.exe",
+        ] {
+            assert!(!passes(bad, false), "{bad:?}");
+            assert!(!passes(bad, true), "{bad:?}");
+            assert_eq!(safe(bad), None, "{bad:?}");
+        }
+        // Refused on Windows only: streams, device names, trailing dots and spaces.
+        for windows_only in [
+            "a/x.txt:Zone.Identifier",
+            "run-2026-11-20T10:00:00/a.pt",
+            "a/what?.txt",
+            "a/CON",
+            "a/nul.txt",
+            "a/COM1.log",
+            "a/x.",
+            "a/x ",
+        ] {
+            assert!(passes(windows_only, false), "{windows_only:?}");
+            assert!(!passes(windows_only, true), "{windows_only:?}");
+        }
+        for ok in ["a/b c/d.tar.gz", "Résumé.pdf", "COM10", "runs/v1.2/a.pt"] {
+            assert!(passes(ok, true) && safe(ok).is_some(), "{ok:?}");
+        }
+        let remote = [r("a/C:x", 1, 1), r("a/D:x", 1, 1)];
         assert!(needed(&remote, &Known::default()).is_empty());
+    }
+
+    #[test]
+    fn names_that_synced_before_still_do() {
+        // Soft hyphens, zero-width spaces and names over 200 bytes (80 CJK characters).
+        let long = format!("{}.png", "画".repeat(80));
+        for ok in ["a/co\u{00AD}op.txt", "a/x\u{200B}y.txt", long.as_str()] {
+            assert!(passes(ok, false) && passes(ok, true), "{ok:?}");
+            assert!(safe(ok).is_some(), "{ok:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_never_replaces_the_folder() {
+        let dir = Path::new(r"D:\Sync\runs");
+        assert_eq!(within(dir, Path::new("C:x")), None);
+        assert_eq!(within(dir, Path::new(r"a\D:x")), None);
+        assert_eq!(
+            within(dir, Path::new(r"a\b.txt")),
+            Some(PathBuf::from(r"D:\Sync\runs\a\b.txt"))
+        );
+    }
+
+    #[test]
+    fn joins_stay_in_the_folder() {
+        let dir = Path::new("/sync/runs");
+        assert_eq!(within(dir, Path::new("/etc/x")), None);
+        assert_eq!(
+            within(dir, Path::new("a/b.txt")),
+            Some(PathBuf::from("/sync/runs/a/b.txt"))
+        );
     }
 
     #[test]

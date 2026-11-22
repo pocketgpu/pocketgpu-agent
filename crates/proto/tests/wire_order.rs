@@ -387,7 +387,9 @@ fn clip_messages_keep_their_numbers() {
 #[test]
 fn new_protocols_come_last() {
     use pocketgpu_proto::alpn;
-    assert_eq!(alpn::ALL.len(), 13);
+    assert_eq!(alpn::ALL.len(), 14);
+    assert_eq!(alpn::ALL[13], alpn::MODEL_GUEST);
+    assert_eq!(alpn::MODEL_GUEST, b"pgpu/model-guest/1");
     assert_eq!(alpn::ALL[12], alpn::PAIR_LAN);
     assert_eq!(alpn::ALL[11], alpn::SCREEN);
     assert_eq!(alpn::SCREEN, b"pgpu/screen/1");
@@ -496,4 +498,40 @@ fn screen_messages_keep_their_numbers() {
         tag(&Response::Error(Error::new(ErrorCode::Invalid, "x"))),
         4
     );
+}
+
+#[test]
+fn share_messages_keep_their_numbers() {
+    use pocketgpu_proto::share::{
+        AgentToGuest, GuestRefusal, GuestState, GuestToAgent, ModelServerRef, NewShare,
+    };
+    let new = NewShare {
+        server: ModelServerRef::Ollama,
+        model: "m".into(),
+        label: "l".into(),
+        from: None,
+        minutes: None,
+        daily_limit: None,
+        pause_for_jobs: true,
+    };
+    assert_eq!(tag(&Request::CreateShare(new)), 31);
+    assert_eq!(tag(&Request::ListShares), 32);
+    assert_eq!(tag(&Request::StopShare { share: 1 }), 33);
+    assert_eq!(tag(&Response::Shares(vec![])), 26);
+    let claim = GuestToAgent::Claim {
+        share: 1,
+        proof: [0; 32],
+    };
+    assert_eq!(tag(&claim), 0);
+    let peek = GuestToAgent::Peek {
+        share: 1,
+        proof: [0; 32],
+    };
+    assert_eq!(tag(&peek), 1);
+    assert_eq!(tag(&GuestToAgent::Status), 2);
+    assert_eq!(tag(&GuestToAgent::Chat { messages: vec![] }), 3);
+    assert_eq!(tag(&AgentToGuest::Text("t".into())), 2);
+    assert_eq!(tag(&AgentToGuest::Done { used_today: 0 }), 3);
+    assert_eq!(tag(&AgentToGuest::Refused(GuestRefusal::Ended)), 4);
+    assert_eq!(tag(&GuestState::Ready), 0);
 }

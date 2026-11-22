@@ -162,6 +162,28 @@ async fn denied_phone_is_not_paired() {
     assert_eq!(h.agent.permission_of(&phone.key.public()), None);
 }
 
+/// The phone's "No, cancel" at the key check drops the connection: the question at the
+/// computer ends, and a late yes saves nothing.
+#[tokio::test]
+async fn phone_leaving_ends_the_question() {
+    let h = Harness::start().await;
+    let mut cli = Cli::start(&h).await;
+    let phone = h.phone(None).await;
+    let mut pairing = start_pair(&h, &phone, cli.input().code()).await;
+    pairing.next().await.unwrap();
+    assert!(matches!(cli.next().await, Response::PairAsk(_)));
+    drop(pairing);
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), cli.next())
+        .await
+        .expect("the question should end when the phone leaves");
+    let Response::PairEnded(why) = ended else {
+        panic!("expected PairEnded, got {ended:?}");
+    };
+    assert!(why.contains("cancelled on the phone"), "{why}");
+    cli.decide(Some(Permission::Control)).await;
+    assert_eq!(h.agent.permission_of(&phone.key.public()), None);
+}
+
 /// `pgpu pair` stopping (Ctrl-C, a closed terminal, no input to read) is not a "no": the
 /// phone hears that nobody could answer.
 #[tokio::test]

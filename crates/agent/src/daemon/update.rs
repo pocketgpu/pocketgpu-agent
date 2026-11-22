@@ -92,11 +92,8 @@ pub async fn install(agent: &std::sync::Arc<Agent>, peer: &Peer, version: &str) 
     if let Some(why) = blocked() {
         return refuse(ErrorCode::Busy, why);
     }
-    if release::same_version(&tag, CURRENT) {
-        return refuse(
-            ErrorCode::Invalid,
-            format!("This agent is already on {CURRENT}"),
-        );
+    if let Some(why) = not_newer(&tag, CURRENT) {
+        return refuse(ErrorCode::Invalid, why);
     }
     if BUSY.swap(true, Ordering::SeqCst) {
         return refuse(ErrorCode::Busy, "An update is already being installed");
@@ -132,6 +129,20 @@ pub async fn install(agent: &std::sync::Arc<Agent>, peer: &Peer, version: &str) 
     }
 }
 
+/// Phones only move the agent forward: an older release may not open this database. Going
+/// back stays possible at the computer with `pgpu update --version`.
+fn not_newer(tag: &str, current: &str) -> Option<String> {
+    if release::same_version(tag, current) {
+        return Some(format!("This agent is already on {current}"));
+    }
+    (!release::is_newer(tag, current)).then(|| {
+        format!(
+            "{} is older than this agent's {current}. To go back, run pgpu update --version on the machine",
+            tag.trim_start_matches('v')
+        )
+    })
+}
+
 async fn download_and_install(tag: &str) -> anyhow::Result<()> {
     let client = cli::client()?;
     let binary = cli::fetch(&client, &cli::repo(), tag).await?;
@@ -161,4 +172,21 @@ fn restart_soon(agent: std::sync::Arc<Agent>) {
             BUSY.store(false, Ordering::SeqCst);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::not_newer;
+
+    #[test]
+    fn phones_only_install_newer_releases() {
+        assert!(not_newer("v1.2.40", "1.2.39").is_none());
+        assert!(not_newer("v1.3.0", "1.2.39").is_none());
+        assert!(not_newer("v1.2.0", "1.2.0-rc.1").is_none());
+        let same = not_newer("v1.2.39", "1.2.39").unwrap();
+        assert!(same.contains("already on 1.2.39"), "{same}");
+        let older = not_newer("v1.2.38", "1.2.39").unwrap();
+        assert!(older.contains("older"), "{older}");
+        assert!(not_newer("v1.2.0-rc.1", "1.2.0").is_some());
+    }
 }

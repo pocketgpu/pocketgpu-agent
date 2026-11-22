@@ -35,8 +35,25 @@ pub const APPS: &[u8] = b"pgpu/apps/1";
 /// A live picture of the machine's screen, one stream per look (F45).
 pub const SCREEN: &[u8] = b"pgpu/screen/1";
 
+/// Share a model (F48): the only protocol a guest key may use. Unknown keys may only claim a
+/// share with its link's secret; a claimed key may only chat with that share's model
+/// (`specs/F48-share-a-model/contracts/model-guest.md`).
+pub const MODEL_GUEST: &[u8] = b"pgpu/model-guest/1";
+
 /// Every protocol the agent serves.
-pub const ALL: [&[u8]; 13] = [
-    PAIR, CONTROL, METRICS, JOBS, SHELL, TUNNEL, EVENTS, DOCKER, FILES, CLIP, APPS, SCREEN,
+pub const ALL: [&[u8]; 14] = [
+    PAIR,
+    CONTROL,
+    METRICS,
+    JOBS,
+    SHELL,
+    TUNNEL,
+    EVENTS,
+    DOCKER,
+    FILES,
+    CLIP,
+    APPS,
+    SCREEN,
     PAIR_LAN,
+    MODEL_GUEST,
 ];

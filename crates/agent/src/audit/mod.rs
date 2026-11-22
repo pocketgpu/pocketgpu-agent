@@ -77,6 +77,9 @@ pub enum Event {
     ScreenAccess,
     /// `pgpu lan on` or `off`: being found on the same Wi-Fi (F47).
     LanAccess,
+    /// Share a model (F48): `made`, `stopped`, `claimed` or `ended`; the target is the
+    /// share's model and id. Never what a guest asked.
+    Share,
 }
 
 impl Event {
@@ -118,6 +121,7 @@ impl Event {
             Self::OllamaSetup => "ollama_setup",
             Self::ScreenAccess => "screen_access",
             Self::LanAccess => "lan_access",
+            Self::Share => "share",
         }
     }
 }

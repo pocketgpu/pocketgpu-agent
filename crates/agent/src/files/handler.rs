@@ -1,6 +1,7 @@
 //! `pgpu/files/1` (F40): one request per bidirectional stream. Every request is checked
 //! against the device's permission as it is now: View for job logs, Control for shared
 //! folders, the Inbox and offers, Shell (and the terminal switch) for everything else.
+//! Guests (F44) may send to the Inbox but not open it: it holds what others sent before.
 //! Each device runs at most 4 transfers at once, and on the default relays big files wait
 //! for a direct link (FR-007).
 
@@ -89,13 +90,23 @@ async fn handle(
             _ => off(),
         });
     }
+    let guest = is_guest(agent, &device);
+    if guest && opens_inbox(&req) {
+        return Some(Response::Error(Error::new(
+            ErrorCode::Forbidden,
+            "you can send files to this machine's Inbox; only its owner can open it",
+        )));
+    }
     match req {
         Request::Overview => {
             let permission = agent.permission_of(&peer.key);
             let agent = agent.clone();
             // Counting a folder can wait on the system (macOS asking to allow Documents):
             // the folders are counted first, each for a moment at most, then the rest is built.
-            let counts = count_folders(&agent).await;
+            let mut counts = count_folders(&agent).await;
+            if guest {
+                counts.inbox = 0;
+            }
             let built =
                 tokio::task::spawn_blocking(move || overview(&agent, &device, permission, counts))
                     .await;
@@ -140,6 +151,27 @@ async fn handle(
             inbox::put(agent, peer.key, sent, send, recv).await
         }
     }
+}
+
+/// A device that joined with an invite (F44): it has an end time.
+fn is_guest(agent: &Agent, device: &str) -> bool {
+    crate::store::devices::get(&agent.db(), device)
+        .ok()
+        .flatten()
+        .is_some_and(|d| d.expires_ms.is_some())
+}
+
+fn opens_inbox(req: &Request) -> bool {
+    matches!(
+        req,
+        Request::List {
+            root: Root::Inbox,
+            ..
+        } | Request::Get {
+            root: Root::Inbox,
+            ..
+        }
+    )
 }
 
 /// What a device sees while files are off: only that.
@@ -343,6 +375,31 @@ mod tests {
         assert!(relay_refusal(false, true, RELAY_LIMIT).is_none());
         assert!(relay_refusal(false, false, big).is_none());
         assert!(relay_refusal(true, true, big).is_none());
+    }
+
+    #[test]
+    fn only_listing_and_getting_open_the_inbox() {
+        let list = |root| Request::List {
+            root,
+            path: String::new(),
+            offset: 0,
+        };
+        let get = |root| Request::Get {
+            root,
+            path: "a".into(),
+            from: 0,
+        };
+        assert!(opens_inbox(&list(Root::Inbox)));
+        assert!(opens_inbox(&get(Root::Inbox)));
+        assert!(!opens_inbox(&list(Root::Offers)));
+        assert!(!opens_inbox(&get(Root::Shared(0))));
+        assert!(!opens_inbox(&Request::Overview));
+        let put = Request::Put {
+            name: "a".into(),
+            size: 1,
+            transfer: [0; 16],
+        };
+        assert!(!opens_inbox(&put));
     }
 
     #[test]

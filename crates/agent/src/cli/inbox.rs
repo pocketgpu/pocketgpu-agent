@@ -27,6 +27,16 @@ pub async fn run(paths: &Paths, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// At most `max` characters, the last one `…` when it was longer.
+fn cut(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
 pub fn render(inbox: &str, files: &[InboxFile], now_ms: i64) -> String {
     if files.is_empty() {
         return format!("The Inbox is empty. Files sent from your phone land in {inbox}.\n");
@@ -38,7 +48,7 @@ pub fn render(inbox: &str, files: &[InboxFile], now_ms: i64) -> String {
     );
     for f in files {
         // Names come from other devices: cleaned before they reach a terminal.
-        let name: String = crate::audit::clean(&f.name).chars().take(40).collect();
+        let name = cut(&crate::audit::clean(&f.name), 40);
         let from = match f.from.as_str() {
             "" => "-".to_string(),
             from => crate::audit::clean(from).chars().take(16).collect(),
@@ -81,5 +91,14 @@ mod tests {
         assert!(!out.contains('\u{1b}'), "{out}");
         let empty = render("~/PocketGPU/Inbox", &[], 0);
         assert!(empty.starts_with("The Inbox is empty."), "{empty}");
+    }
+
+    #[test]
+    fn long_names_end_with_an_ellipsis() {
+        assert_eq!(cut("short.txt", 40), "short.txt");
+        let long = format!("{}.safetensors", "a".repeat(40));
+        let got = cut(&long, 40);
+        assert_eq!(got.chars().count(), 40);
+        assert!(got.ends_with('…'), "{got}");
     }
 }

@@ -16,10 +16,16 @@ thiserror.workspace = true
 tracing.workspace = true
 blake3.workspace = true
 directories = "6"
+# Plain `C:\` paths in place of canonical `\\?\C:\` ones (`folders::landing`).
+dunce = "1"
 
 # The iPhone browses with Apple's Bonjour instead (F47, research R2).
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 mdns-sd.workspace = true
+
+# Quarantine marks on what comes from another computer (`mark.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

@@ -82,6 +82,12 @@ pub fn set_permission(
 ) -> Result<DeviceInfo, String> {
     let d = find(agent, query)?;
     devices::set_permission(&agent.db(), &d.device_id, permission).map_err(|e| format!("{e:#}"))?;
+    if permission < Permission::Shell
+        && let Some(k) = key_of(&d)
+    {
+        // It can't lend the computer any more: the invites it made stop working.
+        agent.pairing.invites.drop_by(&k);
+    }
     let result = format!("{} -> {}", d.permission, permission.as_str());
     let _ = audit::record(
         &agent.db(),
@@ -105,6 +111,7 @@ pub fn revoke(agent: &Agent, query: &str) -> Result<DeviceInfo, String> {
     let before = info(agent, &d);
     devices::remove(&agent.db(), &d.device_id).map_err(|e| format!("{e:#}"))?;
     if let Some(k) = key_of(&d) {
+        agent.pairing.invites.drop_by(&k);
         agent.drop_connections(&k);
     }
     let _ = audit::record(&agent.db(), "local", Event::Revoke, &d.name, "revoked");
@@ -175,6 +182,7 @@ pub fn revoke_by(agent: &Agent, caller: &PublicKey, device: &str) -> Result<Stri
     }
     devices::remove(&agent.db(), &d.device_id).map_err(|e| format!("{e:#}"))?;
     if let Some(k) = key_of(&d) {
+        agent.pairing.invites.drop_by(&k);
         agent.drop_connections(&k);
     }
     let _ = audit::record(
@@ -192,6 +200,7 @@ pub fn unpair(agent: &std::sync::Arc<Agent>, key: PublicKey) -> anyhow::Result<b
     let id = key.to_string();
     let name = devices::get(&agent.db(), &id)?.map(|d| d.name);
     let removed = devices::remove(&agent.db(), &id)?;
+    agent.pairing.invites.drop_by(&key);
     if removed {
         let _ = audit::record(
             &agent.db(),

@@ -117,3 +117,83 @@ async fn a_guest_joins_at_once_and_its_access_ends() {
         .count();
     assert_eq!(ended, 1);
 }
+
+/// Whether a new phone can join with this invite link.
+async fn joins(h: &Harness, uri: &str) -> bool {
+    let PairInput::Qr(qr) = PairInput::parse(uri).unwrap() else {
+        panic!("the invite should be a QR link");
+    };
+    let guest = h.phone(None).await;
+    let addr = h.router.endpoint().addr();
+    let Ok(mut p) = guest
+        .client
+        .pair_at(addr, qr.code, None, info("Guest"))
+        .await
+    else {
+        return false;
+    };
+    let approved = loop {
+        match p.next().await {
+            Ok(pair::Response::Pending { .. }) => continue,
+            Ok(pair::Response::Approved { .. }) => break true,
+            _ => break false,
+        }
+    };
+    approved && h.agent.permission_of(&guest.key.public()).is_some()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_device_that_still_has_shell_lends_and_never_the_terminal() {
+    let h = Harness::start().await;
+    let owner = h.phone(Some(Permission::Shell)).await;
+    let owner_m = h.connect(&owner).await.unwrap();
+    let owner_id = owner.key.public().to_string();
+
+    // A terminal can't be lent for a while.
+    assert_eq!(
+        refusal(owner_m.create_invite(Permission::Shell, 60).await),
+        ErrorCode::Invalid
+    );
+
+    // A Full control guest from before keeps its time, but gets no more.
+    let old = h.phone(None).await.key.public().to_string();
+    {
+        let db = h.agent.db();
+        let (shell, android) = (Permission::Shell, Platform::Android);
+        pocketgpu::store::devices::upsert(&db, &old, "Old guest", android, shell, None).unwrap();
+        pocketgpu::store::devices::set_expiry(&db, &old, Some(i64::MAX / 2)).unwrap();
+    }
+    assert_eq!(
+        refusal(owner_m.extend_guest(&old, 60).await),
+        ErrorCode::Invalid
+    );
+
+    // An invite stops working once its maker no longer has Shell, however that happened.
+    let lowered = owner_m.create_invite(Permission::View, 60).await.unwrap();
+    pocketgpu::store::devices::set_permission(&h.agent.db(), &owner_id, Permission::Control)
+        .unwrap();
+    assert!(
+        !joins(&h, &lowered.uri).await,
+        "a lowered device's invite worked"
+    );
+    pocketgpu::store::devices::set_permission(&h.agent.db(), &owner_id, Permission::Shell).unwrap();
+
+    // Lowered at the computer: its invites are forgotten.
+    let forgotten = owner_m.create_invite(Permission::View, 60).await.unwrap();
+    pocketgpu::daemon::devices::set_permission(&h.agent, &owner_id[..8], Permission::View).unwrap();
+    assert!(!h.agent.pairing.invites.any_open());
+    assert!(!joins(&h, &forgotten.uri).await);
+    pocketgpu::daemon::devices::set_permission(&h.agent, &owner_id[..8], Permission::Shell)
+        .unwrap();
+
+    // Revoked: the same.
+    let revoked = owner_m
+        .create_invite(Permission::Control, 60)
+        .await
+        .unwrap();
+    pocketgpu::daemon::devices::revoke(&h.agent, &owner_id[..8]).unwrap();
+    assert!(
+        !joins(&h, &revoked.uri).await,
+        "a revoked device's invite worked"
+    );
+}

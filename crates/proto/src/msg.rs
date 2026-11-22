@@ -283,6 +283,15 @@ pub mod control {
         /// The computer's LAN key (F47), so this device can recognise it on the same Wi-Fi
         /// without internet; replies `LanKey`. View. Agents before it answer with an error.
         GetLanKey,
+        /// Shares one model with one person (F48, Shell); replies `ShareMade`. Agents before
+        /// it answer with an error.
+        CreateShare(crate::share::NewShare),
+        /// The shares not swept yet (Shell, since it includes waiting links); replies `Shares`.
+        ListShares,
+        /// Ends a share at once (Shell); replies `Shares`.
+        StopShare {
+            share: u64,
+        },
     }
 
     /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
@@ -416,6 +425,9 @@ pub mod control {
             key: [u8; 32],
             on: bool,
         },
+        /// The new share, with its link's parts (F48).
+        ShareMade(crate::share::ShareInfo),
+        Shares(Vec<crate::share::ShareInfo>),
     }
 
     /// The answer to `CheckUpdate`.
@@ -500,7 +512,11 @@ pub mod control {
                 | Self::InstallUpdate { .. }
                 | Self::RevokeDevice { .. }
                 | Self::CreateInvite { .. }
-                | Self::ExtendGuest { .. } => Permission::Shell,
+                | Self::ExtendGuest { .. }
+                // A waiting share's link opens the model to whoever has it (F48).
+                | Self::CreateShare(_)
+                | Self::ListShares
+                | Self::StopShare { .. } => Permission::Shell,
             }
         }
     }

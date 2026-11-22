@@ -13,7 +13,9 @@ postcard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+# Only io-util (not the workspace's "full"), so the guest page (share/wasm) can build it for browsers.
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

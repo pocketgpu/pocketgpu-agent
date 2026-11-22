@@ -10,7 +10,7 @@ use pocketgpu_proto::Permission;
 use pocketgpu_proto::files::clean_name;
 use pocketgpu_proto::local::{FilesStatus, InboxFile, Request, Response};
 
-use super::guard::{self, Context};
+use super::guard;
 use super::{inbox_dir, offers, shown};
 use crate::audit::{self, Event};
 use crate::daemon::state::Agent;
@@ -83,7 +83,7 @@ fn record(agent: &Agent, target: &str, result: &str) {
 }
 
 fn share(agent: &Agent, path: &Path) -> Result<(), String> {
-    let canon = guard::shareable(path, &Context::of(agent))?;
+    let canon = guard::shareable(path, &guard::context(agent))?;
     let added = canon.clone();
     let mut new = false;
     change(agent, |c| {
@@ -125,7 +125,7 @@ fn unshare(agent: &Agent, path: &str) -> Result<(), String> {
 /// Moves the Inbox. Unfinished sends in the old one go: devices start them over in the new
 /// one, and nothing would ever remove them there.
 fn set_inbox(agent: &Agent, path: &Path) -> Result<(), String> {
-    let canon = guard::inbox(path, &Context::of(agent))?;
+    let canon = guard::inbox(path, &guard::context(agent))?;
     let old = inbox_dir(agent);
     let target = format!("inbox {}", shown(&canon));
     // The default place isn't kept canonical (home may be a link, as on Fedora Atomic).
@@ -278,7 +278,7 @@ fn offer(agent: &Arc<Agent>, path: &Path, to: Option<&str>) -> Result<Response, 
 fn own_file(agent: &Agent, path: &Path) -> bool {
     let jobs = agent.paths.jobs_dir();
     let jobs = jobs.canonicalize().unwrap_or(jobs);
-    Context::of(agent)
+    guard::context(agent)
         .agent_dirs
         .iter()
         .any(|d| guard::inside(path, d))

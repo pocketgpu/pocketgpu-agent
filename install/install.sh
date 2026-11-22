@@ -14,8 +14,8 @@ set -eu
 
 REPO="${PGPU_REPO:-pocketgpu/pocketgpu-releases}"
 INSTALL_DIR="${PGPU_INSTALL_DIR:-$HOME/.local/bin}"
-# Public key for the release signature (the same as RELEASE_PUBKEY in the agent). When
-# minisign isn't installed, the download is checked against SHA256SUMS only.
+# Public key for the release signature (the same as RELEASE_PUBKEY in the agent). Checked with
+# minisign, else with OpenSSL 3 (most Linux); with neither (a plain Mac), against SHA256SUMS only.
 MINISIGN_PUBKEY="RWQFc2OekDAK+RAphy78vna45XDYb5pbU3qu7B4d8ERcuzY82sYtkwV4"
 
 has() { command -v "$1" >/dev/null 2>&1; }
@@ -320,13 +320,64 @@ verify_checksum() {
 
 verify_signature() {
     [ -n "$MINISIGN_PUBKEY" ] || return 0
-    if ! has minisign; then
+    if has minisign; then
+        download "$1/SHA256SUMS.minisig" "$2/SHA256SUMS.minisig" quiet
+        minisign -Vqm "$2/SHA256SUMS" -P "$MINISIGN_PUBKEY" >/dev/null || fail "the release signature is not valid"
+    elif openssl_ed25519 "$2"; then
+        download "$1/SHA256SUMS.minisig" "$2/SHA256SUMS.minisig" quiet
+        verify_openssl "$2"
+    else
         printf ', signature not checked (install minisign to check it)'
         return 0
     fi
-    download "$1/SHA256SUMS.minisig" "$2/SHA256SUMS.minisig" quiet
-    minisign -Vqm "$2/SHA256SUMS" -P "$MINISIGN_PUBKEY" >/dev/null || fail "the release signature is not valid"
     printf ', signature valid'
 }
+
+# Whether this OpenSSL signs and checks Ed25519 and has BLAKE2b (OpenSSL 3; not macOS's own
+# LibreSSL): one key made, used and thrown away in $1.
+openssl_ed25519() {
+    has openssl || return 1
+    p="$1/probe"
+    mkdir -p "$p"
+    printf 'probe' >"$p/msg"
+    openssl dgst -blake2b512 -binary "$p/msg" >/dev/null 2>&1 &&
+        openssl genpkey -algorithm ed25519 -out "$p/key" >/dev/null 2>&1 &&
+        openssl pkey -in "$p/key" -pubout -out "$p/pub" >/dev/null 2>&1 &&
+        openssl pkeyutl -sign -inkey "$p/key" -rawin -in "$p/msg" -out "$p/sig" >/dev/null 2>&1 &&
+        openssl pkeyutl -verify -pubin -inkey "$p/pub" -rawin -in "$p/msg" -sigfile "$p/sig" >/dev/null 2>&1
+}
+
+# minisign's check with OpenSSL. The .minisig's second line is "ED" (or legacy "Ed"), the key
+# ID and the Ed25519 signature of the file's BLAKE2b-512 (of the file itself for "Ed"); the
+# public key is "Ed", the key ID and the 32-byte key.
+verify_openssl() {
+    d="$1"
+    sed -n 2p "$d/SHA256SUMS.minisig" >"$d/sig.b64"
+    printf '%s\n' "$MINISIGN_PUBKEY" >"$d/pub.b64"
+    unbase64 "$d/sig.b64" "$d/sig.bin" && unbase64 "$d/pub.b64" "$d/pub.bin" ||
+        fail "the release signature is not valid"
+    [ "$(wc -c <"$d/sig.bin" | tr -d ' ')" = 74 ] || fail "the release signature is not valid"
+    [ "$(bytes "$d/sig.bin" 2 8)" = "$(bytes "$d/pub.bin" 2 8)" ] ||
+        fail "the release was signed with another key"
+    case "$(dd if="$d/sig.bin" bs=1 count=2 2>/dev/null)" in
+        ED) openssl dgst -blake2b512 -binary "$d/SHA256SUMS" >"$d/signed" ;;
+        Ed) cp "$d/SHA256SUMS" "$d/signed" ;;
+        *) fail "the release signature is not valid" ;;
+    esac
+    dd if="$d/sig.bin" of="$d/sig.raw" bs=1 skip=10 count=64 2>/dev/null
+    # The key as DER: Ed25519's fixed 12-byte header, then the 32 bytes.
+    {
+        printf '\060\052\060\005\006\003\053\145\160\003\041\000'
+        dd if="$d/pub.bin" bs=1 skip=10 count=32 2>/dev/null
+    } >"$d/pub.der"
+    openssl pkeyutl -verify -pubin -keyform DER -inkey "$d/pub.der" -rawin \
+        -in "$d/signed" -sigfile "$d/sig.raw" >/dev/null 2>&1 ||
+        fail "the release signature is not valid"
+}
+
+unbase64() { base64 -d <"$1" >"$2" 2>/dev/null || base64 --decode <"$1" >"$2" 2>/dev/null; }
+
+# $3 bytes of file $1 from offset $2, as hex.
+bytes() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
 
 main "$@"

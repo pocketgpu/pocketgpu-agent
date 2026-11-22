@@ -13,7 +13,7 @@ repository = "https://github.com/pocketgpu/pocketgpu-agent"
 
 [workspace.dependencies]
 # Pinned exactly: their APIs change between releases (research.md).
-iroh = "=1.4.1"
+iroh = "=1.5.0"
 nvml-wrapper = "=0.13.0"
 sysinfo = "=0.39.6"
 

@@ -19,6 +19,13 @@ fn info() -> PhoneInfo {
     }
 }
 
+/// An agent that hears Wi-Fi asks over loopback, which stands in for the Wi-Fi here.
+async fn start() -> Harness {
+    let h = Harness::start().await;
+    h.agent.pairing.lan.allow_loopback_for_tests();
+    h
+}
+
 /// What Found on this Wi-Fi would hold for this agent: its id and its loopback address.
 fn found(h: &Harness) -> Found {
     let port = h
@@ -40,7 +47,7 @@ fn found(h: &Harness) -> Found {
 
 #[tokio::test]
 async fn a_phone_found_on_the_wifi_pairs_after_a_yes() {
-    let h = Harness::start().await;
+    let h = start().await;
     let (cli, agent_side) = tokio::io::duplex(64 * 1024);
     let (ar, aw) = tokio::io::split(agent_side);
     tokio::spawn(pocketgpu::pair::session(h.agent.clone(), ar, aw));
@@ -98,7 +105,7 @@ async fn a_phone_found_on_the_wifi_pairs_after_a_yes() {
 
 #[tokio::test]
 async fn nothing_is_heard_without_a_pgpu_pair_session() {
-    let h = Harness::start().await;
+    let h = start().await;
     let phone = h.phone(None).await;
     let result = match phone.client.pair_lan(&found(&h), info()).await {
         Ok(mut p) => p.next().await.map(|_| ()),
@@ -113,8 +120,27 @@ async fn nothing_is_heard_without_a_pgpu_pair_session() {
 
 #[tokio::test]
 async fn nothing_is_heard_when_finding_on_the_wifi_is_off() {
-    let h = Harness::start().await;
+    let h = start().await;
     h.agent.config.write().unwrap().lan = false;
+    let (cli, agent_side) = tokio::io::duplex(64 * 1024);
+    let (ar, aw) = tokio::io::split(agent_side);
+    tokio::spawn(pocketgpu::pair::session(h.agent.clone(), ar, aw));
+    let (mut r, _w) = tokio::io::split(cli);
+    let _ = read_frame::<_, Response>(&mut r).await.unwrap();
+
+    let phone = h.phone(None).await;
+    let result = match phone.client.pair_lan(&found(&h), info()).await {
+        Ok(mut p) => p.next().await.map(|_| ()),
+        Err(e) => Err(e),
+    };
+    assert!(result.is_err());
+    assert_eq!(h.agent.permission_of(&phone.key.public()), None);
+}
+
+#[tokio::test]
+async fn a_phone_on_this_computer_is_not_heard() {
+    // Loopback is not the Wi-Fi: someone on this computer has `pgpu pair` already.
+    let h = Harness::start().await;
     let (cli, agent_side) = tokio::io::duplex(64 * 1024);
     let (ar, aw) = tokio::io::split(agent_side);
     tokio::spawn(pocketgpu::pair::session(h.agent.clone(), ar, aw));
