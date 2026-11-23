@@ -4,7 +4,7 @@
 use iroh::endpoint::{Connection, RecvStream};
 use pocketgpu_proto::ai::{ModelServer, OllamaSetup};
 use pocketgpu_proto::pull::ModelPull;
-use pocketgpu_proto::tunnel::{Method, PullAction, ToAgent, ToPhone};
+use pocketgpu_proto::tunnel::{AnswerAction, Method, PullAction, ToAgent, ToPhone};
 use pocketgpu_proto::{alpn, read_frame, write_frame};
 
 use crate::{ClientError, Machine};
@@ -73,6 +73,14 @@ impl Machine {
         let bytes = self.tunnel(ToAgent::Pulls(action)).await?.body().await?;
         serde_json::from_slice(&bytes)
             .map_err(|e| ClientError::Connection(format!("model downloads: {e}")))
+    }
+
+    /// A chat answer the agent writes down as it comes (`AnswerAction`): started, or again from
+    /// a byte after the connection dropped; it streams back as for `ollama`, and dropping the
+    /// reply doesn't stop it on the machine. An agent too old for it closes the stream
+    /// (`ClientError::NoReply`).
+    pub async fn answer(&self, action: AnswerAction) -> Result<OllamaReply, ClientError> {
+        self.tunnel(ToAgent::Answer(action)).await
     }
 
     async fn tunnel(&self, req: ToAgent) -> Result<OllamaReply, ClientError> {

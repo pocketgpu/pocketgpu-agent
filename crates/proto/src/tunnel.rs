@@ -5,8 +5,9 @@
 //! forwards it on the machine if the path is on its allowlist and the phone has the permission
 //! it needs, then streams the reply: `Head`, any number of `Chunk`s, `End`. `Servers` asks which
 //! model servers there are, answered the same way with one JSON body. Closing the stream
-//! cancels the request, which stops a pull or a reply. The servers never listen on the
-//! network for this. An agent older than `Server` closes the stream without a reply.
+//! cancels the request, which stops a reply; an `Answer` or a download (`Pulls`) goes on on
+//! the machine. The servers never listen on the network for this. An agent older than
+//! `Server` closes the stream without a reply.
 
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,28 @@ pub enum ToAgent {
     /// app is closed: `pull::ModelPull`s as JSON, after the action. An agent older than this
     /// closes the stream without a reply, and the phone pulls through `Request` instead.
     Pulls(PullAction),
+    /// A chat answer the agent writes down as it comes and finishes even when the phone goes
+    /// away, so the phone can pick it up again (Control). Each is the phone's own, by its id.
+    /// An agent older than this closes the stream without a reply, and the phone sends the
+    /// chat as a `Request` or `Server` instead.
+    Answer(AnswerAction),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AnswerAction {
+    /// Sends `body`, the chat's JSON, to Ollama's `/api/chat` (`port` none) or the model
+    /// server's `/v1/chat/completions` on `port`. The reply streams back as for `Request`:
+    /// `Head` with the server's status, its bytes as `Chunk`s, then `End`.
+    Start {
+        id: u64,
+        port: Option<u16>,
+        body: Vec<u8>,
+    },
+    /// The reply to `id` again from its byte `from`: what was written down, then the rest as
+    /// it comes. A reply the agent no longer has is an `Error` (`NotFound`).
+    Resume { id: u64, from: u64 },
+    /// Stops the reply to `id` (the server stops writing it) and forgets it.
+    Stop { id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

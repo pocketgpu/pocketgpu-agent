@@ -7,6 +7,7 @@ mod harness;
 
 mod actions;
 mod alerts;
+mod answer;
 mod apps;
 mod auth;
 mod cli_snapshots;

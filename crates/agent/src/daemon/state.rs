@@ -38,6 +38,8 @@ pub struct Agent {
     pub ollama_setup: crate::ai::setup::State,
     /// Model downloads the agent runs for phones (F17).
     pub pulls: Arc<crate::ai::pull::Pulls>,
+    /// Chat answers being written down for phones (F18), in memory.
+    pub answers: crate::tunnel::Answers,
     /// Shared models (F48): wrong claims and answers being written, in memory.
     pub shares: Arc<crate::share::Runtime>,
     /// Woken by a local `Shutdown` request.
@@ -104,6 +106,7 @@ impl Agent {
             screen: Default::default(),
             ollama_setup: Default::default(),
             pulls: Default::default(),
+            answers: Default::default(),
             shares: Default::default(),
             stop: tokio::sync::Notify::new(),
             started_ms: crate::store::db::now_ms(),

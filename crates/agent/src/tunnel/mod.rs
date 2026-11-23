@@ -4,7 +4,12 @@
 //! Each stream carries one request. The path must be on the allowlist in
 //! `pocketgpu_proto::tunnel::permission_for` (Ollama) or `server_permission_for` (the others,
 //! on their known or added ports only: ai/mod.rs) and the phone needs the permission it names.
-//! Pulls and deletes are audited with the model name; prompts and replies never are.
+//! Pulls and deletes are audited with the model name; prompts and replies never are. A chat
+//! sent as an `Answer` is written down in memory so the phone can pick it up again (answer.rs).
+
+mod answer;
+
+pub use answer::Answers;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +26,7 @@ use crate::daemon::auth::{Peer, PeerProtocol};
 use crate::daemon::state::Agent;
 
 /// Bytes per `Chunk`, well under the frame limit.
-const CHUNK: usize = 64 * 1024;
+pub(crate) const CHUNK: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Tunnel;
@@ -84,6 +89,7 @@ async fn forward(
             };
             pipe(http, &base, call, send, &name).await
         }
+        ToAgent::Answer(action) => answer::serve(agent, peer, http, action, send).await,
         ToAgent::Servers | ToAgent::SetUpOllama { .. } | ToAgent::Pulls(_) => {
             let json = match request {
                 ToAgent::Pulls(action) => {
@@ -161,13 +167,13 @@ fn pulls(
 }
 
 /// What the phone asked a server for.
-struct Call<'a> {
-    method: Method,
-    path: &'a str,
-    body: Vec<u8>,
+pub(crate) struct Call<'a> {
+    pub(crate) method: Method,
+    pub(crate) path: &'a str,
+    pub(crate) body: Vec<u8>,
 }
 
-fn refused(method: Method, path: &str) -> Error {
+pub(crate) fn refused(method: Method, path: &str) -> Error {
     Error::new(
         ErrorCode::Invalid,
         format!("PocketGPU doesn't forward {method:?} {path}"),
@@ -252,27 +258,7 @@ async fn pipe(
     send: &mut SendStream,
     name: &str,
 ) -> Result<(), Error> {
-    let Call { method, path, body } = call;
-    let url = format!("{}{path}", base.trim_end_matches('/'));
-    let req = match method {
-        Method::Get => http.get(&url),
-        Method::Post => http.post(&url),
-        Method::Delete => http.delete(&url),
-    };
-    let req = if body.is_empty() {
-        req
-    } else {
-        req.header("content-type", "application/json").body(body)
-    };
-    let mut res = req.send().await.map_err(|e| {
-        let msg = if e.is_connect() || e.is_timeout() {
-            format!("{name} isn't running on this machine (nothing answers at {base})")
-        } else {
-            format!("could not reach {name}: {e}")
-        };
-        Error::new(ErrorCode::NotFound, msg)
-    })?;
-
+    let mut res = request(http, base, call, name).await?;
     let gone = |_| Error::new(ErrorCode::Unknown, "the phone closed the request");
     write_frame(
         send,
@@ -303,6 +289,36 @@ async fn pipe(
     }
     write_frame(send, &ToPhone::End).await.map_err(gone)?;
     Ok(())
+}
+
+/// Sends one request to the server at `base` on this machine; one that can't reach it says
+/// the server isn't running (`NotFound`).
+pub(crate) async fn request(
+    http: &reqwest::Client,
+    base: &str,
+    call: Call<'_>,
+    name: &str,
+) -> Result<reqwest::Response, Error> {
+    let Call { method, path, body } = call;
+    let url = format!("{}{path}", base.trim_end_matches('/'));
+    let req = match method {
+        Method::Get => http.get(&url),
+        Method::Post => http.post(&url),
+        Method::Delete => http.delete(&url),
+    };
+    let req = if body.is_empty() {
+        req
+    } else {
+        req.header("content-type", "application/json").body(body)
+    };
+    req.send().await.map_err(|e| {
+        let msg = if e.is_connect() || e.is_timeout() {
+            format!("{name} isn't running on this machine (nothing answers at {base})")
+        } else {
+            format!("could not reach {name}: {e}")
+        };
+        Error::new(ErrorCode::NotFound, msg)
+    })
 }
 
 /// The `model` (or older `name`) in a request body, for the audit log.
