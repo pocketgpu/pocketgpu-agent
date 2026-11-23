@@ -3,7 +3,8 @@
 
 use iroh::endpoint::{Connection, RecvStream};
 use pocketgpu_proto::ai::{ModelServer, OllamaSetup};
-use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone};
+use pocketgpu_proto::pull::ModelPull;
+use pocketgpu_proto::tunnel::{Method, PullAction, ToAgent, ToPhone};
 use pocketgpu_proto::{alpn, read_frame, write_frame};
 
 use crate::{ClientError, Machine};
@@ -64,6 +65,14 @@ impl Machine {
             .await?;
         serde_json::from_slice(&bytes)
             .map_err(|e| ClientError::Connection(format!("Ollama setup: {e}")))
+    }
+
+    /// Model downloads the agent runs itself, after starting or stopping one. An agent too
+    /// old to run them closes the stream (`ClientError::NoReply`).
+    pub async fn pulls(&self, action: PullAction) -> Result<Vec<ModelPull>, ClientError> {
+        let bytes = self.tunnel(ToAgent::Pulls(action)).await?.body().await?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::Connection(format!("model downloads: {e}")))
     }
 
     async fn tunnel(&self, req: ToAgent) -> Result<OllamaReply, ClientError> {

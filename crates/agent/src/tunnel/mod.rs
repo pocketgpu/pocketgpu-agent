@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, SendStream};
 use pocketgpu_proto::share::ModelServerRef;
-use pocketgpu_proto::tunnel::{Method, ToAgent, ToPhone, permission_for, server_permission_for};
+use pocketgpu_proto::tunnel::{
+    Method, PullAction, ToAgent, ToPhone, permission_for, server_permission_for,
+};
 use pocketgpu_proto::{Error, ErrorCode, Permission, read_frame, write_frame};
 
 use crate::audit::{self, Event as Audit};
@@ -82,8 +84,12 @@ async fn forward(
             };
             pipe(http, &base, call, send, &name).await
         }
-        ToAgent::Servers | ToAgent::SetUpOllama { .. } => {
+        ToAgent::Servers | ToAgent::SetUpOllama { .. } | ToAgent::Pulls(_) => {
             let json = match request {
+                ToAgent::Pulls(action) => {
+                    pulls(agent, peer, http, action)?;
+                    serde_json::to_vec(&agent.pulls.list())
+                }
                 ToAgent::SetUpOllama { start } => {
                     let needed = if start {
                         Permission::Shell
@@ -112,6 +118,44 @@ async fn forward(
                 .await
                 .map_err(gone)?;
             write_frame(send, &ToPhone::End).await.map_err(gone)
+        }
+    }
+}
+
+/// Starts or stops a model download the agent runs itself (`ai::pull`); listing is open to
+/// every paired phone, starting and stopping one need Shell, like Ollama's `/api/pull`, and any
+/// phone may clear a finished one from the list.
+fn pulls(
+    agent: &Arc<Agent>,
+    peer: &Peer,
+    http: &reqwest::Client,
+    action: PullAction,
+) -> Result<(), Error> {
+    match action {
+        PullAction::List => agent.require(peer, Permission::View, "model downloads"),
+        PullAction::Start { model } => {
+            agent.require(peer, Permission::Shell, "download a model")?;
+            let (base, _) = base_for(agent, ModelServerRef::Ollama)?;
+            if agent.pulls.start(http.clone(), base, &model)? {
+                let model = pocketgpu_proto::pull::model_ref(&model);
+                let _ = audit::record(
+                    &agent.db(),
+                    &peer.key.to_string(),
+                    Audit::ModelPull,
+                    &model,
+                    "requested",
+                );
+            }
+            Ok(())
+        }
+        PullAction::Stop { model } => {
+            if agent.pulls.running(&model) {
+                agent.require(peer, Permission::Shell, "stop a download")?;
+            } else {
+                agent.require(peer, Permission::View, "model downloads")?;
+            }
+            agent.pulls.stop(&model);
+            Ok(())
         }
     }
 }

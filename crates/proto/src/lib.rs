@@ -12,6 +12,7 @@ pub mod lan;
 pub mod local;
 pub mod msg;
 pub mod pairing;
+pub mod pull;
 pub mod push;
 pub mod screen;
 pub mod share;

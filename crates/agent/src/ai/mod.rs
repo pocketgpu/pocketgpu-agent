@@ -4,6 +4,7 @@
 //! these ports, and only while a program of a trusted user listens there (owner.rs).
 
 pub mod owner;
+pub mod pull;
 pub mod setup;
 mod signed;
 

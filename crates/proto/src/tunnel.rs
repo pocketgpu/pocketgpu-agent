@@ -40,6 +40,20 @@ pub enum ToAgent {
     /// Sets up Ollama on the machine as its user (`start`, Shell), or asks how far it is
     /// (View): `ai::OllamaSetup` as JSON (board 87).
     SetUpOllama { start: bool },
+    /// Model downloads the agent runs itself, so they go on while the phone is away or the
+    /// app is closed: `pull::ModelPull`s as JSON, after the action. An agent older than this
+    /// closes the stream without a reply, and the phone pulls through `Request` instead.
+    Pulls(PullAction),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PullAction {
+    /// The downloads, under way and finished (View).
+    List,
+    /// Starts downloading `model` with Ollama, or keeps the one under way (Shell).
+    Start { model: String },
+    /// Stops a download (Shell), or forgets a finished one (View).
+    Stop { model: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
