@@ -87,13 +87,27 @@ pub async fn list(
     offset: u32,
 ) -> Response {
     let (agent, device) = (agent.clone(), device.to_string());
-    let listed = tokio::task::spawn_blocking(move || entries(&agent, &device, root, &path)).await;
-    match listed {
-        Ok(Ok(all)) => page(all, offset),
-        Ok(Err(e)) => Response::Error(e),
-        Err(e) => Response::Error(error(ErrorCode::Internal, e.to_string())),
+    let key = PathBuf::from(format!("list {root:?}")).join(&path);
+    let read = move || entries(&agent, &device, root, &path);
+    match super::within(key, LIST_WAIT, read).await {
+        Some(Ok(all)) => page(all, offset),
+        Some(Err(e)) => Response::Error(e),
+        None => Response::Error(error(ErrorCode::Busy, NOT_OPENING)),
     }
 }
+
+/// How long a folder may take to open before the device is told why it waits.
+const LIST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Said when a folder doesn't open in time: on a Mac, nearly always the permission dialog.
+const NOT_OPENING: &str = if cfg!(target_os = "macos") {
+    "This folder isn't opening yet: macOS is asking for permission on this machine. Click \
+     Allow there, or turn on pocketgpu in System Settings → Privacy & Security → Files and \
+     Folders, then try again"
+} else {
+    "This folder isn't opening yet on this machine (a slow or network drive?). Try again in \
+     a moment"
+};
 
 fn entries(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Vec<Entry>, Error> {
     match root {

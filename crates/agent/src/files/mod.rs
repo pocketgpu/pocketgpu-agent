@@ -134,11 +134,11 @@ pub fn count_files(dir: &Path) -> u32 {
     })
 }
 
-/// Folders whose file count is still being read. On a Mac, opening Documents, Downloads or
-/// Desktop waits for the person to allow it (a dialog that may sit unseen on the screen), and a
-/// plain read would wait with it, once more for every request. A folder in this set is skipped
-/// until its read comes back.
-static COUNTING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+/// Folder reads still going. On a Mac, opening Documents, Downloads or Desktop waits for the
+/// person to allow it (a dialog that may sit unseen on the screen), and a plain read would wait
+/// with it, once more for every request. A read in this set is not started again until it
+/// comes back.
+static READING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
     std::sync::LazyLock::new(Default::default);
 
 /// [`count_files`] that gives up after `wait`: `None` while the folder won't open yet (macOS
@@ -146,22 +146,24 @@ static COUNTING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<
 /// still answers with everything else. The read carries on in its own thread and, once it
 /// comes back, later requests count normally.
 pub async fn count_files_within(dir: PathBuf, wait: Duration) -> Option<u32> {
-    count_within(dir, wait, count_files).await
+    let read = dir.clone();
+    within(dir, wait, move || count_files(&read)).await
 }
 
-async fn count_within(
-    dir: PathBuf,
+/// Runs the blocking `read` of `key` in its own thread for up to `wait`: `None` when it took
+/// longer, or when a read of the same `key` is still going (no second one starts then).
+pub(crate) async fn within<T: Send + 'static>(
+    key: PathBuf,
     wait: Duration,
-    count: impl FnOnce(&Path) -> u32 + Send + 'static,
-) -> Option<u32> {
-    if !COUNTING.lock().expect("counting lock").insert(dir.clone()) {
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    if !READING.lock().expect("reading lock").insert(key.clone()) {
         return None;
     }
-    let read = dir.clone();
     let task = tokio::task::spawn_blocking(move || {
-        let n = count(&read);
-        COUNTING.lock().expect("counting lock").remove(&read);
-        n
+        let out = read();
+        READING.lock().expect("reading lock").remove(&key);
+        out
     });
     tokio::time::timeout(wait, task).await.ok()?.ok()
 }
@@ -193,34 +195,31 @@ mod count_tests {
     #[tokio::test]
     async fn counts_a_folder_that_opens() {
         let dir = PathBuf::from("/tmp/pgpu-count-ok");
-        let n = count_within(dir, Duration::from_secs(2), |_| 7).await;
+        let n = within(dir, Duration::from_secs(2), || 7).await;
         assert_eq!(n, Some(7));
     }
 
     #[tokio::test]
     async fn gives_up_on_a_folder_that_waits_and_does_not_pile_up_reads() {
         let dir = PathBuf::from("/tmp/pgpu-count-slow");
-        let slow = |_: &Path| {
+        let slow = || {
             std::thread::sleep(Duration::from_millis(400));
             3
         };
         // The first read waits longer than we do.
         assert_eq!(
-            count_within(dir.clone(), Duration::from_millis(50), slow).await,
+            within(dir.clone(), Duration::from_millis(50), slow).await,
             None
         );
         // Asked again while it is still waiting: no second read starts.
         let started = std::time::Instant::now();
         assert_eq!(
-            count_within(dir.clone(), Duration::from_secs(2), |_| 99).await,
+            within(dir.clone(), Duration::from_secs(2), || 99).await,
             None
         );
         assert!(started.elapsed() < Duration::from_millis(100));
         // Once the first read is over, counting works again.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(
-            count_within(dir, Duration::from_secs(2), |_| 5).await,
-            Some(5)
-        );
+        assert_eq!(within(dir, Duration::from_secs(2), || 5).await, Some(5));
     }
 }
