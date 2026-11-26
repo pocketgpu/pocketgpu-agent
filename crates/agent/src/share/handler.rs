@@ -155,7 +155,7 @@ pub fn peek(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> Ag
     }
     let now = now_ms();
     let Some(share) = store::get(&agent.db(), share_id).ok().flatten() else {
-        agent.shares.wrong(key, share_id);
+        agent.shares.wrong(key);
         return refused(GuestRefusal::NotForYou);
     };
     let expected = proof(
@@ -164,9 +164,8 @@ pub fn peek(agent: &Agent, key: PublicKey, share_id: u64, given: [u8; 32]) -> Ag
         key.as_bytes(),
     );
     if !proof_matches(&expected, &given) {
-        if agent.shares.wrong(key, share_id) && share.state == ShareState::Waiting {
-            end(agent, share_id, "local", "too many wrong tries");
-        }
+        // Counted against this key only: a wrong proof never ends a share (super::WRONG_PER_KEY).
+        agent.shares.wrong(key);
         return refused(GuestRefusal::NotForYou);
     }
     let mine = store::share_of_guest(&agent.db(), &key.to_string())
@@ -197,7 +196,7 @@ pub fn claim(
     let now = now_ms();
     let share = store::get(&agent.db(), share_id).ok().flatten();
     let Some(share) = share else {
-        agent.shares.wrong(key, share_id);
+        agent.shares.wrong(key);
         return refused(GuestRefusal::NotForYou);
     };
     let expected = proof(
@@ -206,9 +205,7 @@ pub fn claim(
         key.as_bytes(),
     );
     if !proof_matches(&expected, &given) {
-        if agent.shares.wrong(key, share_id) && share.state == ShareState::Waiting {
-            end(agent, share_id, "local", "too many wrong tries");
-        }
+        agent.shares.wrong(key);
         return refused(GuestRefusal::NotForYou);
     }
     let key_text = key.to_string();
@@ -229,13 +226,15 @@ pub fn claim(
         }
         ShareState::Waiting => {}
     }
+    // Checked again while the claim is made: a Stop or the sweeper since the read above wins.
     let db = agent.db();
-    match store::insert_guest(&db, &key_text, share_id, now) {
-        Ok(true) => {}
-        Ok(false) => return refused(GuestRefusal::AlreadyClaimed),
+    match store::claim_guest(&db, &key_text, share_id, now) {
+        Ok(store::Claim::Made) => {}
+        Ok(store::Claim::Taken) => return refused(GuestRefusal::AlreadyClaimed),
+        Ok(store::Claim::Expired) => return refused(GuestRefusal::LinkExpired),
+        Ok(store::Claim::Ended) => return refused(GuestRefusal::Ended),
         Err(_) => return refused(GuestRefusal::NotForYou),
     }
-    let _ = store::set_state(&db, share_id, ShareState::Active, now);
     let short = key.fmt_short().to_string();
     let _ = audit::record(&db, &short, Event::Share, &target(&share), "claimed");
     drop(db);
@@ -245,4 +244,84 @@ pub fn claim(
         .unwrap_or(share);
     let status = guest_status(agent, &share, now);
     (AgentToGuest::Claimed(status), Some(share))
+}
+
+#[cfg(test)]
+mod tests {
+    use iroh::SecretKey;
+    use pocketgpu_proto::share::{ModelServerRef, NewShare};
+
+    use super::*;
+    use crate::collect::fake::FakeGpus;
+
+    fn share(agent: &Agent) -> store::Share {
+        let new = NewShare {
+            server: ModelServerRef::Ollama,
+            model: "llama3:8b".into(),
+            label: "Mum".into(),
+            from: None,
+            minutes: Some(10080),
+            daily_limit: None,
+            pause_for_jobs: true,
+        };
+        store::insert(&agent.db(), &new, [9; 32], "owner", now_ms()).unwrap()
+    }
+
+    fn right(agent: &Agent, s: &store::Share, key: &PublicKey) -> [u8; 32] {
+        proof(
+            &s.secret,
+            agent.identity.agent_id().as_bytes(),
+            key.as_bytes(),
+        )
+    }
+
+    #[test]
+    fn an_old_link_ends_no_share_and_turns_no_guest_away() {
+        let agent = Agent::in_memory(Arc::new(FakeGpus::new(1))).unwrap();
+        let s = share(&agent);
+        // Someone with an old link knows this computer and the next share's number. From
+        // fresh keys, two wrong proofs each: at the waiting share and at the next one.
+        let next = s.id + 1;
+        let not_for_you = AgentToGuest::Refused(GuestRefusal::NotForYou);
+        for _ in 0..40 {
+            let k = SecretKey::generate().public();
+            assert_eq!(peek(&agent, k, s.id, [0; 32]), not_for_you);
+            assert_eq!(claim(&agent, k, next, [0; 32]).0, not_for_you);
+        }
+        let after = store::get(&agent.db(), s.id).unwrap().unwrap();
+        assert_eq!(
+            after.state,
+            ShareState::Waiting,
+            "wrong proofs ended a share"
+        );
+
+        let guest = SecretKey::generate().public();
+        let proof = right(&agent, &s, &guest);
+        assert!(matches!(
+            claim(&agent, guest, s.id, proof).0,
+            AgentToGuest::Claimed(_)
+        ));
+        let t = share(&agent);
+        assert_eq!(t.id, next);
+        let guest = SecretKey::generate().public();
+        let proof = right(&agent, &t, &guest);
+        assert!(matches!(
+            claim(&agent, guest, t.id, proof).0,
+            AgentToGuest::Claimed(_)
+        ));
+    }
+
+    #[test]
+    fn a_key_with_two_wrong_proofs_is_refused() {
+        let agent = Agent::in_memory(Arc::new(FakeGpus::new(1))).unwrap();
+        let s = share(&agent);
+        let k = SecretKey::generate().public();
+        claim(&agent, k, s.id, [0; 32]);
+        claim(&agent, k, s.id, [0; 32]);
+        let proof = right(&agent, &s, &k);
+        assert_eq!(
+            claim(&agent, k, s.id, proof).0,
+            AgentToGuest::Refused(GuestRefusal::TooManyTries)
+        );
+    }
 }

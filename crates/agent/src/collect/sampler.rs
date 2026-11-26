@@ -92,7 +92,8 @@ impl Sampler {
             let me = self.clone();
             let sample = tokio::task::spawn_blocking(move || me.take(ollama_up)).await;
             let Ok(sample) = sample else { continue };
-            if sample.at_ms >= minute_start + 60_000 {
+            let (next, done) = next_minute(minute_start, sample.at_ms);
+            if done {
                 let window = self.window(minute_start, minute_start + 60_000);
                 let rows = summarize(&window);
                 let system = summarize_system(&window);
@@ -106,9 +107,23 @@ impl Sampler {
                         tracing::warn!("could not save system history: {e}");
                     }
                 }
-                minute_start = sample.at_ms / 60_000 * 60_000;
             }
+            minute_start = next;
         }
+    }
+}
+
+/// The minute being summed up after a sample at `at_ms`, and whether the one before is
+/// over and gets written. A clock set back starts again at its own minute, so history carries
+/// on instead of waiting for the clock to catch up.
+fn next_minute(minute_start: u64, at_ms: u64) -> (u64, bool) {
+    let own = at_ms / 60_000 * 60_000;
+    if at_ms >= minute_start + 60_000 {
+        (own, true)
+    } else if at_ms < minute_start {
+        (own, false)
+    } else {
+        (minute_start, false)
     }
 }
 
@@ -324,6 +339,25 @@ mod tests {
             .query_row("SELECT count(*) FROM metrics_system_1m", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn minutes_go_on_after_the_clock_is_set_back() {
+        let start = 1_000 * 60_000;
+        assert_eq!(next_minute(start, start + 59_999), (start, false));
+        assert_eq!(next_minute(start, start + 61_000), (start + 60_000, true));
+        // Eight hours back: the next minute is written a minute later, not in eight hours.
+        let mut minute = start;
+        let back = start - 8 * 3600 * 1000 + 30_000;
+        let mut written = Vec::new();
+        for s in 0..90 {
+            let (next, done) = next_minute(minute, back + s * 1000);
+            if done {
+                written.push(minute);
+            }
+            minute = next;
+        }
+        assert_eq!(written, vec![start - 8 * 3600 * 1000]);
     }
 
     #[test]

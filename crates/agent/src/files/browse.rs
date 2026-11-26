@@ -8,7 +8,7 @@ use pocketgpu_proto::files::{Entry, Kind, PAGE, Response, Root};
 use pocketgpu_proto::{Error, ErrorCode};
 
 use super::offers;
-use super::resolve::{Refused, Rules};
+use super::resolve::{self, FileId, Refused, Rules};
 use crate::daemon::state::Agent;
 use crate::store::db::now_ms;
 
@@ -19,22 +19,129 @@ pub(super) fn error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message)
 }
 
+/// [`root_rules`] with what this device may not open in it.
+pub(super) fn rules(agent: &Agent, root: Root, closed: &Closed) -> Result<Rules, Error> {
+    let mut rules = root_rules(agent, root)?;
+    rules.deny.extend(closed.paths.iter().cloned());
+    rules.deny_ids.extend(&closed.ids);
+    Ok(rules)
+}
+
+/// Folders a device may not open: for a guest (F44), the Inbox, which holds what others
+/// sent, also inside a shared folder (`Downloads` holds it). Empty for everyone else.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Closed {
+    paths: Vec<PathBuf>,
+    ids: Vec<FileId>,
+}
+
+impl Closed {
+    /// Whether a canonical path is in a closed folder.
+    pub(super) fn holds(&self, canon: &Path) -> bool {
+        resolve::denied(canon, &self.paths, &self.ids)
+    }
+}
+
+/// The Inbox, closed to a guest: as set, and as last found on disk.
+pub(super) async fn inbox_closed(agent: &Agent) -> Closed {
+    let dir = super::inbox_dir(agent);
+    let found = INBOX.find(dir.clone(), look_at).await;
+    let mut closed = Closed {
+        paths: vec![dir],
+        ids: Vec::new(),
+    };
+    if let Some(Some((canon, id))) = found {
+        closed.paths.push(canon);
+        closed.ids.extend(id);
+    }
+    closed
+}
+
+/// A folder's canonical path and which folder it is on disk; `None` when it isn't there.
+type Found = Option<(PathBuf, Option<FileId>)>;
+
+fn look_at(dir: &Path) -> Found {
+    let canon = dir.canonicalize().ok()?;
+    let id = std::fs::metadata(&canon).ok().and_then(|m| FileId::of(&m));
+    Some((canon, id))
+}
+
+static INBOX: Looker = Looker::new();
+
+/// How long a request waits for the Inbox to be looked at.
+const LOOK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Looks at one folder on disk for requests. On a Mac that can wait for the person to allow
+/// Downloads (a dialog that may sit unseen), so a request waits only [`LOOK_WAIT`], at most
+/// one look is going, and while one takes long the last answer stands in.
+struct Looker(tokio::sync::Mutex<Option<Look>>);
+
+struct Look {
+    dir: PathBuf,
+    found: Option<Found>,
+    going: Option<tokio::task::JoinHandle<Found>>,
+}
+
+impl Looker {
+    const fn new() -> Self {
+        Self(tokio::sync::Mutex::const_new(None))
+    }
+
+    /// What `look` finds at `dir` now, or the last answer while a look takes long; `None`
+    /// when there is none yet. Requests at the same time take turns, so none goes without
+    /// an answer just because another one is looking.
+    async fn find(&self, dir: PathBuf, look: fn(&Path) -> Found) -> Option<Found> {
+        let mut state = self.0.lock().await;
+        if state.as_ref().is_none_or(|l| l.dir != dir) {
+            *state = Some(Look {
+                dir: dir.clone(),
+                found: None,
+                going: None,
+            });
+        }
+        let state = state.as_mut().expect("set above");
+        // A look that already took long isn't waited for again.
+        let wait = if state.going.is_some() {
+            std::time::Duration::ZERO
+        } else {
+            LOOK_WAIT
+        };
+        let going = state
+            .going
+            .get_or_insert_with(|| tokio::task::spawn_blocking(move || look(&dir)));
+        if let Ok(done) = tokio::time::timeout(wait, going).await {
+            state.going = None;
+            if let Ok(found) = done {
+                state.found = Some(found);
+            }
+        }
+        state.found.clone()
+    }
+}
+
 /// Where a root is on disk and how paths in it are checked.
-pub(super) fn rules(agent: &Agent, root: Root) -> Result<Rules, Error> {
+fn root_rules(agent: &Agent, root: Root) -> Result<Rules, Error> {
     fn not_found(what: &'static str) -> impl Fn(Refused) -> Error {
         move |_| error(ErrorCode::NotFound, what)
     }
     match root {
-        Root::Shared(i) => {
-            let dir = agent
+        Root::Shared(_) | Root::SharedId(_) => {
+            let shared = agent
                 .config
                 .read()
                 .expect("config lock poisoned")
                 .files_shared
-                .get(i as usize)
-                .cloned()
-                .ok_or_else(|| error(ErrorCode::NotFound, "that folder is no longer shared"))?;
-            Rules::new(&dir).map_err(not_found("that shared folder is gone"))
+                .clone();
+            let dir = match root {
+                // By how it is shown, as in `Overview`: unsharing another doesn't move it.
+                Root::SharedId(id) => shared
+                    .iter()
+                    .find(|p| Root::shared_id(&super::shown(p)) == id),
+                Root::Shared(i) => shared.get(i as usize),
+                _ => None,
+            }
+            .ok_or_else(|| error(ErrorCode::NotFound, "that folder is no longer shared"))?;
+            Rules::new(dir).map_err(not_found("that shared folder is gone"))
         }
         Root::Inbox => {
             Rules::new(&super::inbox_dir(agent)).map_err(not_found("the Inbox is empty"))
@@ -85,10 +192,11 @@ pub async fn list(
     root: Root,
     path: String,
     offset: u32,
+    closed: Closed,
 ) -> Response {
     let (agent, device) = (agent.clone(), device.to_string());
     let key = PathBuf::from(format!("list {root:?}")).join(&path);
-    let read = move || entries(&agent, &device, root, &path);
+    let read = move || entries(&agent, &device, root, &path, &closed);
     match super::within(key, LIST_WAIT, read).await {
         Some(Ok(all)) => page(all, offset),
         Some(Err(e)) => Response::Error(e),
@@ -109,7 +217,13 @@ const NOT_OPENING: &str = if cfg!(target_os = "macos") {
      a moment"
 };
 
-fn entries(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Vec<Entry>, Error> {
+fn entries(
+    agent: &Agent,
+    device: &str,
+    root: Root,
+    path: &str,
+    closed: &Closed,
+) -> Result<Vec<Entry>, Error> {
     match root {
         Root::Offers => {
             if !path.is_empty() {
@@ -141,7 +255,7 @@ fn entries(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Vec<En
         // No Inbox yet: nothing was sent.
         Root::Inbox if path.is_empty() && !super::inbox_dir(agent).exists() => Ok(Vec::new()),
         _ => {
-            let rules = rules(agent, root)?;
+            let rules = rules(agent, root, closed)?;
             let dir = rules.folder(path).map_err(|e| e.to_error())?;
             Ok(read_folder(&rules, &dir))
         }
@@ -159,7 +273,8 @@ fn file_entry(path: &Path) -> Option<Entry> {
 }
 
 /// Files and folders in a checked folder: hidden ones only where the root allows them,
-/// links only when they stay inside, no devices, pipes or sockets.
+/// links only when they stay inside, nothing in a closed folder, no devices, pipes or
+/// sockets.
 fn read_folder(rules: &Rules, dir: &Path) -> Vec<Entry> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir)
@@ -179,10 +294,17 @@ fn read_folder(rules: &Rules, dir: &Path) -> Vec<Entry> {
             if !inside {
                 continue;
             }
+        } else if rules.deny.iter().any(|d| path.starts_with(d)) {
+            // `dir` is canonical, so `path` is too.
+            continue;
         }
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
+        // The folders above it were checked with `dir`.
+        if FileId::of(&meta).is_some_and(|id| rules.deny_ids.contains(&id)) {
+            continue;
+        }
         let kind = if meta.is_dir() {
             Kind::Folder
         } else if meta.is_file() {

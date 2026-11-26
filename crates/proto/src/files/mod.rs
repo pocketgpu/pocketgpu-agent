@@ -37,6 +37,10 @@ pub enum Root {
     /// The agent's user's home folder, and wherever links in it lead (PocketGPU's own
     /// folders aside), hidden files included: Shell, and only while the terminal is on.
     Home,
+    /// The shared folder shown as `Folder.path`, by [`Root::shared_id`] of that path: it
+    /// stays the same folder when another one is unshared, where `Shared(i)` moves. Agents
+    /// before it can't read the request and answer `Invalid`.
+    SharedId(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,9 +170,22 @@ impl Root {
     pub fn min_permission(self) -> Permission {
         match self {
             Self::JobLogs => Permission::View,
-            Self::Shared(_) | Self::Inbox | Self::Offers => Permission::Control,
+            Self::Shared(_) | Self::SharedId(_) | Self::Inbox | Self::Offers => Permission::Control,
             Self::Home => Permission::Shell,
         }
+    }
+
+    /// The id of the shared folder shown as `path` (`Folder.path`, such as
+    /// `~/ComfyUI/output`): FNV-1a, the same on every device and version.
+    pub fn shared_id(path: &str) -> u64 {
+        path.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    /// Whether it is a shared folder, by place or by id.
+    pub fn is_shared(self) -> bool {
+        matches!(self, Self::Shared(_) | Self::SharedId(_))
     }
 }
 
@@ -211,5 +228,39 @@ mod tests {
             transfer: [0; 16],
         };
         assert_eq!(put.min_permission(), Permission::Control);
+        assert_eq!(get(Root::SharedId(7)).min_permission(), Permission::Control);
+    }
+
+    #[test]
+    fn a_shared_folder_id_follows_its_path_and_never_changes() {
+        // FNV-1a's own test values: apps and agents of every version agree.
+        assert_eq!(Root::shared_id(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(Root::shared_id("a"), 0xaf63_dc4c_8601_ec8c);
+        assert_ne!(
+            Root::shared_id("~/ComfyUI/output"),
+            Root::shared_id("~/datasets")
+        );
+        assert!(Root::SharedId(1).is_shared() && Root::Shared(0).is_shared());
+        assert!(!Root::Inbox.is_shared());
+    }
+
+    #[test]
+    fn agents_before_ids_refuse_one_and_still_read_a_place() {
+        // `Root` as agents before `SharedId` read it.
+        #[derive(Debug, Deserialize)]
+        enum Before {
+            Shared(u32),
+            Inbox,
+            JobLogs,
+            Offers,
+            Home,
+        }
+        let id = postcard::to_stdvec(&Root::SharedId(7)).unwrap();
+        assert!(postcard::from_bytes::<Before>(&id).is_err());
+        let place = postcard::to_stdvec(&Root::Shared(1)).unwrap();
+        assert!(matches!(
+            postcard::from_bytes::<Before>(&place),
+            Ok(Before::Shared(1))
+        ));
     }
 }

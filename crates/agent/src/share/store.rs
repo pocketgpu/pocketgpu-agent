@@ -191,13 +191,59 @@ pub fn guest_of_share(db: &Connection, share: u64) -> Result<Option<String>> {
 }
 
 /// Adds the guest; false when the share already has one or the key is a guest elsewhere.
-pub fn insert_guest(db: &Connection, key: &str, share: u64, now_ms: i64) -> Result<bool> {
+/// Only through [`claim_guest`], which checks the share still waits.
+fn insert_guest(db: &Connection, key: &str, share: u64, now_ms: i64) -> Result<bool> {
     let n = db.execute(
         "INSERT OR IGNORE INTO model_guests (key, share_id, claimed_ms, last_seen_ms) \
          VALUES (?1, ?2, ?3, ?3)",
         params![key, share as i64, now_ms],
     )?;
     Ok(n == 1)
+}
+
+/// How a claim came out, decided in one transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// The key is the share's guest now and the share is active.
+    Made,
+    /// The share has a guest already, or the key is a guest of another share.
+    Taken,
+    /// The share still waits, but its link can't be opened any more.
+    Expired,
+    /// The share has ended or is gone.
+    Ended,
+}
+
+/// Makes `key` the share's only guest and the share active, only while it still waits and
+/// its link still opens at `now`. The state is checked in the same transaction as the
+/// change, so a Stop or the sweeper that ended the share since it was read stays ended.
+pub fn claim_guest(db: &Connection, key: &str, share: u64, now_ms: i64) -> Result<Claim> {
+    let tx = db.unchecked_transaction()?;
+    let n = tx.execute(
+        "UPDATE model_shares SET state = 'active' WHERE id = ?1 AND state = 'waiting' \
+         AND claim_until_ms > ?2 AND (ends_ms IS NULL OR ends_ms > ?2)",
+        params![share as i64, now_ms],
+    )?;
+    if n == 0 {
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM model_shares WHERE id = ?1",
+                [share as i64],
+                |r| r.get(0),
+            )
+            .optional()?;
+        return Ok(match state.as_deref() {
+            Some("active") => Claim::Taken,
+            Some("waiting") => Claim::Expired,
+            _ => Claim::Ended,
+        });
+    }
+    if !insert_guest(&tx, key, share, now_ms)? {
+        // Dropping the transaction puts the share back to waiting.
+        return Ok(Claim::Taken);
+    }
+    tx.commit()?;
+    Ok(Claim::Made)
 }
 
 pub fn remove_guest(db: &Connection, share: u64) -> Result<()> {
@@ -269,4 +315,76 @@ pub fn soonest_due(db: &Connection) -> Result<Option<i64>> {
         [],
         |r| r.get(0),
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: i64 = 1_800_000_000_000;
+
+    fn waiting(db: &Connection) -> Share {
+        let new = NewShare {
+            server: ModelServerRef::Ollama,
+            model: "llama3:8b".into(),
+            label: "Mum".into(),
+            from: None,
+            minutes: None,
+            daily_limit: None,
+            pause_for_jobs: true,
+        };
+        insert(db, &new, [7; 32], "owner", NOW).unwrap()
+    }
+
+    fn state(db: &Connection, id: u64) -> ShareState {
+        get(db, id).unwrap().unwrap().state
+    }
+
+    #[test]
+    fn a_claim_after_a_stop_leaves_the_share_ended() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        let s = waiting(&db);
+        // The claim read the share while it waited; then Stop or the sweeper ended it.
+        remove_guest(&db, s.id).unwrap();
+        set_state(&db, s.id, ShareState::Ended, NOW).unwrap();
+        assert_eq!(claim_guest(&db, "guest", s.id, NOW).unwrap(), Claim::Ended);
+        assert_eq!(state(&db, s.id), ShareState::Ended);
+        assert_eq!(guest_of_share(&db, s.id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_waiting_share_is_claimed_once() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        let s = waiting(&db);
+        assert_eq!(claim_guest(&db, "first", s.id, NOW).unwrap(), Claim::Made);
+        assert_eq!(state(&db, s.id), ShareState::Active);
+        assert_eq!(claim_guest(&db, "second", s.id, NOW).unwrap(), Claim::Taken);
+        assert_eq!(guest_of_share(&db, s.id).unwrap().as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn a_key_already_a_guest_leaves_the_other_share_waiting() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        let (a, b) = (waiting(&db), waiting(&db));
+        assert_eq!(claim_guest(&db, "guest", a.id, NOW).unwrap(), Claim::Made);
+        assert_eq!(claim_guest(&db, "guest", b.id, NOW).unwrap(), Claim::Taken);
+        assert_eq!(state(&db, b.id), ShareState::Waiting);
+        assert_eq!(guest_of_share(&db, b.id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_link_past_its_time_is_not_claimed() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        let s = waiting(&db);
+        let late = s.claim_until_ms;
+        assert_eq!(
+            claim_guest(&db, "guest", s.id, late).unwrap(),
+            Claim::Expired
+        );
+        assert_eq!(state(&db, s.id), ShareState::Waiting);
+        assert_eq!(
+            claim_guest(&db, "guest", s.id + 1, NOW).unwrap(),
+            Claim::Ended
+        );
+    }
 }

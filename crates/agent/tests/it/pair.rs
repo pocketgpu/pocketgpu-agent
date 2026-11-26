@@ -148,6 +148,30 @@ async fn typed_code_finds_the_rendezvous_endpoint() {
     ));
 }
 
+/// A guest (F44) approved at the computer stays: its end time goes.
+#[tokio::test]
+async fn pairing_at_the_computer_keeps_a_guest() {
+    let h = Harness::start().await;
+    let phone = h.phone(Some(Permission::View)).await;
+    let id = phone.key.public().to_string();
+    pocketgpu::store::devices::set_expiry(&h.agent.db(), &id, Some(i64::MAX / 2)).unwrap();
+    let mut cli = Cli::start(&h).await;
+    let mut pairing = start_pair(&h, &phone, cli.input().code()).await;
+    pairing.next().await.unwrap();
+    assert!(matches!(cli.next().await, Response::PairAsk(_)));
+    cli.decide(Some(Permission::Control)).await;
+    assert!(matches!(
+        pairing.next().await.unwrap(),
+        pair::Response::Approved { .. }
+    ));
+    assert!(matches!(cli.next().await, Response::Paired { .. }));
+    let saved = pocketgpu::store::devices::get(&h.agent.db(), &id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.expires_ms, None);
+    assert_eq!(saved.permission, "control");
+}
+
 #[tokio::test]
 async fn denied_phone_is_not_paired() {
     let h = Harness::start().await;
@@ -227,6 +251,8 @@ async fn wrong_codes_are_refused_then_burned() {
     }
     assert!(matches!(cli.next().await, Response::PairEnded(_)));
     assert!(!h.agent.pairing.is_open());
+    // The Wi-Fi record stops showing the computer's name and ID.
+    assert!(!*h.agent.pairing.watch_waiting().borrow());
 
     // Even the right code no longer works.
     let phone = h.phone(None).await;

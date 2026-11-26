@@ -15,6 +15,15 @@ pub fn check() -> Result<()> {
     Ok(())
 }
 
+/// Stopping or restarting the service (an update, a crash) stops only the agent, as sshd's
+/// unit does. Terminals and actions started from phones run in the unit's group, and with the
+/// default `control-group` systemd would kill what they started to outlive them, in tmux or
+/// with nohup. A plain shell still ends: its terminal hangs up when the agent exits.
+const KILL_MODE: &str = concat!(
+    "# Only the agent stops: what phones start in tmux or with nohup keeps running.\n",
+    "KillMode=process\n",
+);
+
 /// The unit file for the binary at `exe`.
 pub fn unit_file(exe: &Path) -> String {
     format!(
@@ -25,7 +34,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=\"{}\" agent
+{KILL_MODE}ExecStart=\"{}\" agent
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -120,6 +129,87 @@ pub fn restart() -> Result<()> {
     systemctl(&["restart", UNIT])
 }
 
+/// Once, in the agent that systemd started: a unit written before `KillMode=process` gets
+/// it, so the next restart (an update, a crash) leaves what phones started running. An update
+/// only swaps the binary, so the unit on disk is still the old agent's. When the file has it
+/// but systemd still uses the old kill mode (the reload after writing it failed), it reloads.
+pub fn upgrade_unit() {
+    if !is_this_process() {
+        return;
+    }
+    let Ok(path) = unit_path() else { return };
+    let Ok(old) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let res = match with_kill_mode(&old) {
+        Some(new) => {
+            let tmp = path.with_extension("service.new");
+            std::fs::write(&tmp, new)
+                .and_then(|()| std::fs::rename(&tmp, &path))
+                .map_err(anyhow::Error::from)
+                .and_then(|()| systemctl(&["daemon-reload"]))
+        }
+        None if kill_mode_in(&old) == Some("process")
+            && loaded_kill_mode().is_some_and(|m| m != "process") =>
+        {
+            systemctl(&["daemon-reload"])
+        }
+        None => return,
+    };
+    match res {
+        Ok(()) => tracing::info!("service unit now leaves phones' tmux and nohup jobs running"),
+        Err(e) => tracing::warn!("could not update {}: {e:#}", path.display()),
+    }
+}
+
+/// `unit` with [`KILL_MODE`] at the top of its `[Service]` section, or `None` when it sets a
+/// kill mode already (someone chose one) or has no such section.
+fn with_kill_mode(unit: &str) -> Option<String> {
+    if kill_mode_in(unit).is_some() {
+        return None;
+    }
+    let mut out = String::with_capacity(unit.len() + KILL_MODE.len());
+    let mut added = false;
+    for line in unit.split_inclusive('\n') {
+        out.push_str(line);
+        if !added && line.trim() == "[Service]" {
+            if !line.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(KILL_MODE);
+            added = true;
+        }
+    }
+    added.then_some(out)
+}
+
+/// The kill mode a unit file sets, if any; as in systemd, spaces around `=` don't count and
+/// the last one wins.
+fn kill_mode_in(unit: &str) -> Option<&str> {
+    unit.lines()
+        .filter_map(|l| l.split_once('='))
+        .rfind(|(key, _)| key.trim() == "KillMode")
+        .map(|(_, mode)| mode.trim())
+}
+
+/// The kill mode systemd uses for the unit, which changes only on `daemon-reload`.
+fn loaded_kill_mode() -> Option<String> {
+    let out = user_systemctl()
+        .args(["show", "-p", "KillMode", "--value", UNIT])
+        .output()
+        .ok()?;
+    let mode = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !mode.is_empty()).then_some(mode)
+}
+
+/// Whether stopping the running service leaves what phones started (`KillMode=process`).
+pub fn leaves_phone_programs() -> bool {
+    state() == "active" && loaded_kill_mode().as_deref() == Some("process")
+}
+
+/// What `pgpu service uninstall` says when [`leaves_phone_programs`] held.
+pub const LEFT_RUNNING: &str = "  Programs started from phones (tmux, nohup, Ollama) keep running.";
+
 /// `systemctl --user`, reaching the user's service manager even without a login session
 /// (after `su - user` or `sudo -u user`, which don't set its address) when it is running,
 /// as it is with lingering.
@@ -181,7 +271,68 @@ fn linger() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::in_unit;
+    use super::{in_unit, kill_mode_in, unit_file, with_kill_mode};
+    use std::path::Path;
+
+    /// The unit agents wrote before `KillMode=process`.
+    const OLD_UNIT: &str = "[Unit]
+Description=PocketGPU agent
+Documentation=https://pocketgpu.app/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=\"/home/ana/.local/bin/pocketgpu\" agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
+";
+
+    #[test]
+    fn restarts_stop_only_the_agent() {
+        // The default, control-group, kills tmux and nohup jobs started from phones.
+        let new = unit_file(Path::new("/home/ana/.local/bin/pocketgpu"));
+        let service = new.split("[Service]").nth(1).unwrap();
+        let service = service.split("\n[").next().unwrap();
+        assert!(service.lines().any(|l| l == "KillMode=process"), "{new}");
+    }
+
+    #[test]
+    fn older_units_get_the_kill_mode_once() {
+        let new = unit_file(Path::new("/home/ana/.local/bin/pocketgpu"));
+        assert_eq!(with_kill_mode(OLD_UNIT).as_deref(), Some(new.as_str()));
+        assert_eq!(with_kill_mode(&new), None);
+        // A kill mode someone chose stays; other lines they added stay too.
+        let chosen = OLD_UNIT.replace("RestartSec=5\n", "RestartSec=5\nKillMode=mixed\n");
+        assert_eq!(with_kill_mode(&chosen), None);
+        let edited = OLD_UNIT.replace(
+            "RestartSec=5\n",
+            "RestartSec=5\nEnvironment=CUDA_VISIBLE_DEVICES=1\n",
+        );
+        let up = with_kill_mode(&edited).unwrap();
+        assert!(up.contains("Environment=CUDA_VISIBLE_DEVICES=1\n"), "{up}");
+        assert!(up.contains("[Service]\n# Only the agent stops"), "{up}");
+        assert_eq!(with_kill_mode("[Unit]\nDescription=x\n"), None);
+        assert_eq!(with_kill_mode(""), None);
+    }
+
+    #[test]
+    fn reads_the_kill_mode_the_file_sets() {
+        // What decides whether a failed reload is tried again.
+        let new = unit_file(Path::new("/home/ana/.local/bin/pocketgpu"));
+        assert_eq!(kill_mode_in(&new), Some("process"));
+        assert_eq!(kill_mode_in(OLD_UNIT), None);
+        let last = new.replace("RestartSec=5\n", "RestartSec=5\n  KillMode = mixed\n");
+        assert_eq!(kill_mode_in(&last), Some("mixed"), "the last one wins");
+        let off = OLD_UNIT.replace("RestartSec=5\n", "RestartSec=5\n# KillMode=process\n");
+        assert_eq!(kill_mode_in(&off), None, "a comment sets nothing");
+        // A kill mode written with spaces is someone's choice too.
+        assert_eq!(with_kill_mode(&off.replace("# ", "")), None);
+        assert_eq!(with_kill_mode(&last), None);
+    }
 
     #[test]
     fn only_the_user_unit_is_the_service() {

@@ -8,6 +8,7 @@ use pocketgpu_proto::msg::jobs::JobState;
 use pocketgpu_proto::{Error, ErrorCode, MachineInfo, Permission, read_frame, write_frame};
 
 use super::auth::{Peer, PeerProtocol};
+use super::root::RootCheck;
 use super::state::Agent;
 use crate::actions::handler as actions;
 use crate::collect::system::os_name;
@@ -42,6 +43,26 @@ fn is_guest(agent: &Agent, peer: &Peer) -> bool {
         .is_some_and(|d| d.expires_ms.is_some())
 }
 
+/// A saved command runs anything, so writing one from a phone is terminal access too: it
+/// needs the terminal on, and stays off with it while the agent runs as root in a container.
+fn may_write_actions(shell_on: bool, root_in_container: bool) -> Result<(), Error> {
+    if root_in_container {
+        return Err(Error::new(
+            ErrorCode::Forbidden,
+            "the agent runs as root in this container, so actions can't be created or edited \
+             from a phone",
+        ));
+    }
+    if !shell_on {
+        return Err(Error::new(
+            ErrorCode::Forbidden,
+            "terminal access is off on this machine, so actions can't be created or edited \
+             from a phone. Turn it on there with: pgpu shell on",
+        ));
+    }
+    Ok(())
+}
+
 fn guests(agent: &Agent) -> Response {
     match crate::pair::guest::list(agent) {
         Ok(g) => Response::Guests(g),
@@ -53,15 +74,12 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
     if let Err(e) = agent.require(peer, req.min_permission(), &describe(&req)) {
         return Response::Error(e);
     }
-    // A saved command runs anything, so writing one from a phone is terminal access too.
-    if matches!(req, Request::CreateAction(_) | Request::EditAction { .. })
-        && !agent.config.read().expect("config lock poisoned").shell
-    {
-        return Response::Error(Error::new(
-            ErrorCode::Forbidden,
-            "terminal access is off on this machine, so actions can't be created or edited \
-             from a phone. Turn it on there with: pgpu shell on",
-        ));
+    if matches!(req, Request::CreateAction(_) | Request::EditAction { .. }) {
+        let shell_on = agent.config.read().expect("config lock poisoned").shell;
+        let root_in_container = matches!(super::root::check(), Ok(RootCheck::RootInContainer));
+        if let Err(e) = may_write_actions(shell_on, root_in_container) {
+            return Response::Error(e);
+        }
     }
     match req {
         Request::Hello { .. } => Response::MachineInfo(machine_info(agent, peer)),
@@ -265,5 +283,25 @@ fn describe(req: &Request) -> String {
         Request::ChangeShare(c) => format!("ChangeShare {}", c.share),
         Request::ExtendGuest { .. } => "ExtendGuest".into(),
         Request::PowerAction { action } => format!("PowerAction {}", action.as_str()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_are_written_from_a_phone_only_while_the_terminal_could_open() {
+        assert!(may_write_actions(true, false).is_ok());
+        let off = may_write_actions(false, false).unwrap_err();
+        assert_eq!(off.code, ErrorCode::Forbidden);
+        assert!(off.message.contains("pgpu shell on"), "{}", off.message);
+        // As root in a container the terminal stays off, so saved commands do too,
+        // even with `pgpu shell on`.
+        for shell_on in [true, false] {
+            let root = may_write_actions(shell_on, true).unwrap_err();
+            assert_eq!(root.code, ErrorCode::Forbidden);
+            assert!(root.message.contains("root"), "{}", root.message);
+        }
     }
 }

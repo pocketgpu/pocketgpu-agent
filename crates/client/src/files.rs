@@ -17,6 +17,8 @@ use crate::{ClientError, Machine, request};
 pub struct Downloaded {
     /// Bytes in the file now, from before a resume included.
     pub size: u64,
+    /// When the file was last changed on the machine, as it was sent (Unix ms).
+    pub modified_ms: u64,
     pub blake3: [u8; 32],
 }
 
@@ -84,8 +86,8 @@ impl Machine {
         send.finish()
             .map_err(|e| ClientError::Connection(e.to_string()))?;
 
-        let size = match read_frame::<_, Response>(&mut recv).await? {
-            Some(Response::Head { size, .. }) => size,
+        let (size, modified_ms) = match read_frame::<_, Response>(&mut recv).await? {
+            Some(Response::Head { size, modified_ms }) => (size, modified_ms),
             Some(Response::Error(e)) => return Err(ClientError::Remote(e)),
             Some(_) | None => return Err(ClientError::NoReply),
         };
@@ -124,7 +126,11 @@ impl Machine {
         if hash != expected {
             return Err(ClientError::HashMismatch);
         }
-        Ok(Downloaded { size, blake3: hash })
+        Ok(Downloaded {
+            size,
+            modified_ms,
+            blake3: hash,
+        })
     }
 
     /// Sends `src` to the machine's Inbox as `name` (the machine cleans the name and picks

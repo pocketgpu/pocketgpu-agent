@@ -196,6 +196,14 @@ fn texts_name_the_device_and_the_action() {
     assert_eq!(n.title, "New device paired: Pixel 8");
     assert!(n.body.contains("Shell access"));
     assert_eq!(n.revoke, Some(("p8".into(), "Pixel 8".into())));
+    // macOS notices have no buttons, so they name a command that exists.
+    if cfg!(target_os = "macos") {
+        assert!(
+            n.body.ends_with("run: pgpu revoke \"Pixel 8\""),
+            "{}",
+            n.body
+        );
+    }
     let c = remote(
         &db,
         "p8",
@@ -213,6 +221,8 @@ fn texts_name_the_device_and_the_action() {
     let t = remote(&db, "p8", Event::ShellOpen, "session 1", "ok").unwrap();
     assert_eq!(text(&t, "rig-1").title, "Pixel 8 opened a terminal");
     assert_eq!(text(&t, "rig-1").revoke, None);
+    // No tray: the desktop app isn't shipped, so the notice names the command instead.
+    assert!(text(&t, "rig-1").body.ends_with("run: pgpu devices"));
 }
 
 #[test]

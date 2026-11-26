@@ -12,7 +12,14 @@ export type Message = {
 	/** The answer's speed, when the computer sent it. */
 	speed?: { tokens_per_s: number; ms: number };
 };
-export type Saved = { id: string; fragment: string; key: number[]; claimed: boolean };
+export type Saved = {
+	id: string;
+	fragment: string;
+	key: number[];
+	claimed: boolean;
+	/** When the link was last opened from its address (links kept before this have none). */
+	opened?: number;
+};
 
 const DB = 'pocketgpu-share';
 const LINKS = 'links';
@@ -52,10 +59,16 @@ async function run<T>(
 export const getLink = (id: string) =>
 	run<Saved | undefined>(LINKS, 'readonly', (s) => s.get(id) as IDBRequest<Saved | undefined>);
 export const putLink = (link: Saved) => run(LINKS, 'readwrite', (s) => s.put(link));
-/** The link opened last, for a reload after the address bar was cleaned. */
+/** A link that can't be read, so a later visit doesn't come back to it. */
+export const forgetLink = (id: string) => run(LINKS, 'readwrite', (s) => s.delete(id));
+/** The link opened last, for a reload after the address bar was cleaned. Links come back in
+ *  the order of their ids, which says nothing of when they were opened. */
 export async function lastLink(): Promise<Saved | undefined> {
 	const all = await run<Saved[]>(LINKS, 'readonly', (s) => s.getAll() as IDBRequest<Saved[]>);
-	return all.at(-1);
+	return all.reduce<Saved | undefined>(
+		(last, l) => (!last || (l.opened ?? 0) >= (last.opened ?? 0) ? l : last),
+		undefined
+	);
 }
 
 /** The link's chats (chats.ts); a list of messages from before several chats is read too. */

@@ -37,8 +37,14 @@ export type Reply =
 	| { Done: { used_today: number; speed?: Speed } }
 	| { Refused: Refusal };
 
+// Loads the wasm once. A load that failed (a dropped connection, say) is forgotten, so the
+// next try loads it again instead of failing for good.
 let ready: Promise<unknown> | null = null;
-const loaded = () => (ready ??= init());
+const loaded = () =>
+	(ready ??= init().catch((e: unknown) => {
+		ready = null;
+		throw e;
+	}));
 
 export async function freshKey(): Promise<number[]> {
 	await loaded();

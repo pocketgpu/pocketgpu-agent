@@ -81,7 +81,7 @@ pub fn frames(backtrace: &str) -> Vec<String> {
         if skip {
             continue;
         }
-        let name = name.split("::h").next().unwrap_or(name);
+        let name = without_hash(name);
         out.push(match at {
             Some(at) => format!("{name}  {at}"),
             None => name.to_string(),
@@ -91,6 +91,17 @@ pub fn frames(backtrace: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// A symbol's name without the `::h` and 16 hex digits Rust may add at its end; a module or
+/// function whose name starts with `h` (`handler`, `head`) is kept.
+fn without_hash(name: &str) -> &str {
+    match name.rsplit_once("::h") {
+        Some((head, hash)) if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            head
+        }
+        _ => name,
+    }
 }
 
 /// Writes a report to `pending` when the program panics, then lets the previous hook run.
@@ -148,7 +159,7 @@ mod tests {
              at /rustc/abc/library/std/src/backtrace.rs:312:13
    1: pocketgpu_proto::crash::install_hook::{{closure}}
    2: std::panicking::rust_panic_with_hook
-   3: pocketgpu_app::live::watch::h1234abcd
+   3: pocketgpu_app::live::watch::h1234abcd5678ef90
              at /home/ann/src/pocketgpu/app/src-tauri/src/live.rs:88:9
    4: tauri::app::Builder::build
    5: core::ops::function::FnOnce::call_once";
@@ -157,6 +168,21 @@ mod tests {
             [
                 "pocketgpu_app::live::watch  live.rs:88:9",
                 "tauri::app::Builder::build"
+            ]
+        );
+    }
+
+    #[test]
+    fn names_starting_with_h_are_kept() {
+        let bt = "   0: pocketgpu::files::handler::serve::h3f2a9c01b4d5e6f7
+   1: pocketgpu::share::hello::head
+   2: pocketgpu::jobs::heartbeat::{{closure}}::h0123456789abcdef";
+        assert_eq!(
+            frames(bt),
+            [
+                "pocketgpu::files::handler::serve",
+                "pocketgpu::share::hello::head",
+                "pocketgpu::jobs::heartbeat::{{closure}}"
             ]
         );
     }

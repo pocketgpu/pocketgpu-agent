@@ -44,7 +44,11 @@ pub async fn run(paths: &Paths, json: bool, action: Option<Action>) -> Result<()
     }
     print!("{}", render(&list));
     if changed {
-        if restarted {
+        if restarted && cfg!(windows) {
+            println!(
+                "Restarting the agent to use them; a phone's terminal reconnects in a few seconds."
+            );
+        } else if restarted {
             println!("Restarted the agent service to use them.");
         } else {
             println!("Restart the agent to use them: stop `pgpu agent` and start it again.");
@@ -70,7 +74,9 @@ pub fn render(list: &[String]) -> String {
     out
 }
 
-/// Restarts the user service when it runs, so the endpoint binds with the new relays.
+/// Restarts the user service when it runs, so the endpoint binds with the new relays. On
+/// Windows a detached helper starts the agent again, so this works from a phone's terminal,
+/// which closes with the agent.
 fn restart() -> bool {
     crate::cli::service::state() == "active" && crate::cli::service::restart().is_ok()
 }

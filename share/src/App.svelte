@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { Connection, freshKey, type Refusal, type Reply, type Status } from './lib/guest.js';
-	import { readFragment } from './lib/link.js';
+	import { badLink, readFragment } from './lib/link.js';
 	import { fresh, openMessages, withMessages, type Chats } from './lib/chats.js';
 	import {
+		forgetLink,
 		getChats,
 		getLink,
 		lastLink,
@@ -12,7 +13,7 @@
 		type Message,
 		type Saved
 	} from './lib/store.js';
-	import { plain, unreachable, type Plain } from './lib/words.js';
+	import { invalidLink, plain, unreachable, type Plain } from './lib/words.js';
 	import Chat from './screens/Chat.svelte';
 	import State from './screens/State.svelte';
 	import Welcome from './screens/Welcome.svelte';
@@ -56,7 +57,14 @@
 		try {
 			conn = await Connection.open(saved!.fragment, saved!.key);
 			return conn;
-		} catch {
+		} catch (e) {
+			if (badLink(e)) {
+				// Trying again won't help. A link never used here isn't kept for a later visit.
+				clearTimeout(timer);
+				view = { v: 'state', what: invalidLink };
+				if (!saved!.claimed) void forgetLink(saved!.id).catch(() => {});
+				return null;
+			}
 			view = { v: 'state', what: unreachable(status) };
 			later();
 			return null;
@@ -199,12 +207,16 @@
 		if (location.hash) history.replaceState(null, '', location.pathname);
 		const found = frag ? await getLink(frag.id) : await lastLink();
 		if (found) saved = found;
-		else if (frag) {
+		else if (frag)
 			saved = { id: frag.id, fragment: frag.raw, key: await freshKey(), claimed: false };
-			await putLink(saved);
-		} else {
+		else {
 			view = { v: 'nolink' };
 			return;
+		}
+		// A reload, which comes back without the address's link, opens the link opened last.
+		if (frag) {
+			saved = { ...saved, opened: Date.now() };
+			await putLink(saved);
 		}
 		chats = await getChats(saved.id);
 		messages = openMessages(chats);

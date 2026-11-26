@@ -275,6 +275,7 @@ fn files_messages_keep_their_numbers() {
         Root::JobLogs,
         Root::Offers,
         Root::Home,
+        Root::SharedId(0),
     ];
     for (n, root) in roots.into_iter().enumerate() {
         assert_eq!(tag(&root) as usize, n, "{root:?} moved");

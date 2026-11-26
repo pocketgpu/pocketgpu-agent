@@ -9,6 +9,8 @@ pub struct Paths {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    /// Where else the command line looks for the agent (see [`Self::sockets`]).
+    other_sockets: Vec<PathBuf>,
 }
 
 impl Paths {
@@ -19,14 +21,19 @@ impl Paths {
         }
         let dirs = directories::ProjectDirs::from("app", "pocketgpu", "pocketgpu")
             .context("could not find a home directory")?;
-        let runtime_dir = dirs
-            .runtime_dir()
-            .map(Path::to_path_buf)
+        // The same folder the command line and the tray app look in, whatever the shell's
+        // environment: on Linux, `/run/user/<uid>/pocketgpu` once that folder is there.
+        let runtime_dir = pocketgpu_client::local::runtime_dir()
             .unwrap_or_else(|| dirs.data_local_dir().to_path_buf());
+        #[cfg(unix)]
+        let other_sockets = pocketgpu_client::local::socket_paths();
+        #[cfg(not(unix))]
+        let other_sockets = Vec::new();
         Ok(Self {
             config_dir: dirs.config_dir().to_path_buf(),
             data_dir: dirs.data_local_dir().to_path_buf(),
             runtime_dir,
+            other_sockets,
         })
     }
 
@@ -36,6 +43,7 @@ impl Paths {
             config_dir: root.clone(),
             data_dir: root.clone(),
             runtime_dir: root,
+            other_sockets: Vec::new(),
         }
     }
 
@@ -87,6 +95,28 @@ impl Paths {
     /// Local socket for the command line (a named pipe name on Windows).
     pub fn socket(&self) -> PathBuf {
         self.runtime_dir.join("pocketgpu.sock")
+    }
+
+    /// Where the command line looks for the agent, in order: [`Self::socket`], then where an
+    /// agent started from another kind of shell, or an older agent, would listen.
+    pub fn sockets(&self) -> Vec<PathBuf> {
+        let mut out = vec![self.socket()];
+        for path in self
+            .other_sockets
+            .iter()
+            .cloned()
+            .chain([self.data_dir.join("pocketgpu.sock")])
+        {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// Held by the running agent, so a second one for the same data can't start.
+    pub fn lock_file(&self) -> PathBuf {
+        self.data_dir.join("agent.lock")
     }
 }
 

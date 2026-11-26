@@ -1,6 +1,7 @@
 //! The login entry on Windows: `HKCU\...\Run` starts `pocketgpu agent --background`, which
-//! starts the agent with no console window. No Windows service: those run outside the user's
-//! session, and the terminal (F16) must open the user's own shell.
+//! starts the agent with no console window, through a watcher (`pocketgpu watch-agent`) that
+//! starts it again if it fails. No Windows service: those run outside the user's session, and
+//! the terminal (F16) must open the user's own shell.
 
 use std::time::Duration;
 
@@ -47,18 +48,19 @@ pub fn state() -> &'static str {
     }
 }
 
-/// Whether this process is the agent the login entry runs: `start` marks the agent it starts
-/// (at login, after `pgpu service install` and after an update). Terminals and actions started
-/// from phones don't inherit the mark (`AGENT_ONLY_ENV`), so an agent started by hand, a dev
-/// build or a test never counts, even while the background agent runs.
+/// Whether this process is the agent the login entry runs: the watcher `start` starts marks
+/// its agent (at login, after `pgpu service install` and after an update). Terminals and
+/// actions started from phones don't inherit the mark (`AGENT_ONLY_ENV`), so an agent started
+/// by hand, a dev build or a test never counts, even while the background agent runs.
 pub fn is_this_process() -> bool {
     std::env::var_os(winsys::SERVICE_MARKER).is_some()
 }
 
-/// Stops the running agent and starts it again, so it picks up a new binary or relays.
+/// Restarts the agent, so it picks up a new binary or relays: a detached helper starts it
+/// again, so this completes even when run from a phone's terminal, which closes with the
+/// agent (and would end this command before it could start the agent itself).
 pub fn restart() -> Result<()> {
-    stop()?;
-    start(&installed_exe()?)
+    restart_detached()
 }
 
 /// After an update from a phone: starts a detached `pocketgpu restart-agent` from the new
@@ -84,6 +86,46 @@ pub fn start_when_stopped() -> Result<()> {
     start(&installed_exe()?)
 }
 
+/// `pocketgpu watch-agent`: runs the agent, and starts it again after a crash or an error, as
+/// systemd and launchd do (`super::watch`). A clean stop ends this too.
+pub fn watch() -> Result<()> {
+    let log = Paths::discover()?.agent_log();
+    let mut restarts = super::watch::Restarts::default();
+    loop {
+        let started = std::time::Instant::now();
+        let status = winsys::spawn_agent(&installed_exe()?, &log)?.wait()?;
+        let Some(pause) = restarts.after_exit(status.success(), started.elapsed()) else {
+            return Ok(());
+        };
+        note(
+            &log,
+            &format!(
+                "watch-agent: the agent ended ({status}); starting it again in {} s",
+                pause.as_secs()
+            ),
+        );
+        std::thread::sleep(pause);
+        // Turned off meanwhile (`pgpu service uninstall`), or another agent answers: one
+        // started by hand, or after an update.
+        if !winsys::has_login_entry() || running() {
+            return Ok(());
+        }
+        crate::store::paths::rotate_log(&log);
+    }
+}
+
+/// A line in the agent's log.
+fn note(log: &std::path::Path, line: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 /// The binary to start. After `pgpu update` this process runs from an old binary
 /// (`pocketgpu.old.exe` or `pocketgpu.old-….exe`).
 fn installed_exe() -> Result<std::path::PathBuf> {
@@ -94,12 +136,12 @@ fn installed_exe() -> Result<std::path::PathBuf> {
     }
 }
 
-/// Starts the agent in the background and waits until its pipe answers.
+/// Starts the agent in the background, through the watcher, and waits until its pipe answers.
 pub fn start(exe: &std::path::Path) -> Result<()> {
     let paths = Paths::discover()?;
     paths.create_all()?;
     crate::store::paths::rotate_log(&paths.agent_log());
-    winsys::spawn_background(exe, &paths.agent_log())?;
+    winsys::spawn_detached(exe, &["watch-agent"])?;
     if wait_for(running, Duration::from_secs(10)) {
         Ok(())
     } else {

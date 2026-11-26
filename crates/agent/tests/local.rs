@@ -12,6 +12,7 @@ use pocketgpu_proto::local::{Request, Response};
 fn finds_the_same_socket_as_the_agent() {
     let paths = pocketgpu::store::paths::Paths::discover().unwrap();
     assert_eq!(pocketgpu_client::local::socket_path(), Some(paths.socket()));
+    assert_eq!(pocketgpu_client::local::socket_paths(), paths.sockets());
     assert_eq!(pocketgpu_client::local::data_dir(), Some(paths.data_dir));
 }
 

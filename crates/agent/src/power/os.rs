@@ -40,6 +40,9 @@ fn command(action: PowerKind) -> (&'static str, &'static [&'static str]) {
 
 #[cfg(target_os = "macos")]
 fn command(action: PowerKind) -> (&'static str, &'static [&'static str]) {
+    // Like Apple menu → Restart: apps are asked to quit, and one with unsaved work can stop
+    // it after osascript exits 0. No forced option without root, so the agent looks again
+    // later and says so if the Mac is still on (`power::STILL_ON`).
     match action {
         PowerKind::Restart => (
             "osascript",

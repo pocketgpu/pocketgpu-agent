@@ -9,6 +9,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Only the agent stops: what phones start in tmux or with nohup keeps running.
+KillMode=process
 ExecStart="/home/ana/.local/bin/pocketgpu" agent
 Restart=on-failure
 RestartSec=5

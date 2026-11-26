@@ -81,6 +81,8 @@ windows-sys = { version = "0.61", features = [
     # The clipboard's secret mark (F41).
     "Win32_System_DataExchange",
     "Win32_System_Environment",
+    # The child without admin rights ends with the elevated `pgpu` (winsys/unelevated).
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_SystemServices",
     "Win32_System_Threading",

@@ -8,11 +8,15 @@ const CANCEL_HINT: &str = "To stop it, press Cancel.";
 #[cfg(target_os = "macos")]
 const CANCEL_HINT: &str = "To stop it, run: pgpu power cancel";
 
-/// How to revoke from the notice: its button, or on macOS (no buttons yet) the app.
-#[cfg(not(target_os = "macos"))]
-const REVOKE_HINT: &str = "Revoke it.";
-#[cfg(target_os = "macos")]
-const REVOKE_HINT: &str = "Revoke it in PocketGPU, or with: pgpu devices revoke";
+/// How to revoke from the notice: its button, or on macOS (no buttons yet) a phone or the
+/// command line.
+fn revoke_hint(who: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("Revoke it on your phone, or run: pgpu revoke \"{who}\"")
+    } else {
+        "Revoke it.".into()
+    }
+}
 
 /// The notice for one action.
 pub fn text(r: &Remote, machine: &str) -> Notice {
@@ -33,7 +37,8 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             (
                 format!("{who} joined as a guest"),
                 format!(
-                    "Invited by {by}: {level}, {how_long}. It ends by itself. Not you? {REVOKE_HINT}"
+                    "Invited by {by}: {level}, {how_long}. It ends by itself. Not you? {}",
+                    revoke_hint(who)
                 ),
             )
         }
@@ -46,12 +51,12 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
             };
             (
                 format!("New device paired: {who}"),
-                format!("With {what}. Not you? {REVOKE_HINT}"),
+                format!("With {what}. Not you? {}", revoke_hint(who)),
             )
         }
         Kind::Terminal => (
             format!("{who} opened a terminal"),
-            format!("On {machine}, as you. PocketGPU's tray shows who is connected."),
+            format!("On {machine}, as you. To see who is connected, run: pgpu devices"),
         ),
         Kind::Kill => (
             format!("{who} stopped {}", r.target),
@@ -106,7 +111,7 @@ pub fn text(r: &Remote, machine: &str) -> Notice {
         ),
         Kind::ScreenLook => (
             format!("{who} is looking at this screen"),
-            "Looking only. Stop it from PocketGPU's tray, or: pgpu screen stop".to_string(),
+            "Looking only. To stop it, run: pgpu screen stop".to_string(),
         ),
         Kind::OllamaSetup => (
             format!("{who} is setting up Ollama"),

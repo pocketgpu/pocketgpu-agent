@@ -88,7 +88,8 @@ impl Pairing {
             .is_some_and(|s| s.code.is_open(Instant::now()))
     }
 
-    /// Checks a phone's proof. Too many wrong proofs end the code.
+    /// Checks a phone's proof. Too many wrong proofs end the code, and the Wi-Fi record stops
+    /// showing the computer (the session can't clear an empty slot).
     pub fn check(
         &self,
         endpoint: &PublicKey,
@@ -102,6 +103,8 @@ impl Pairing {
         let result = s.code.check(Instant::now(), endpoint, device, proof);
         if matches!(result, Err(Refusal::Burned)) {
             *slot = None;
+            // Sent under the lock, so a session installed right after can't be told "no".
+            self.waiting_tx().send_replace(false);
         }
         result
     }
@@ -124,7 +127,7 @@ impl Pairing {
             code,
             rendezvous: None,
         });
-        drop(slot);
+        // Under the lock, as `check` and `clear` do: the record follows the slot's order.
         self.waiting_tx().send_replace(true);
         Ok(())
     }
@@ -139,7 +142,6 @@ impl Pairing {
         let mut slot = self.slot();
         if slot.as_ref().is_some_and(|s| s.session == session) {
             *slot = None;
-            drop(slot);
             self.waiting_tx().send_replace(false);
         }
     }
@@ -322,6 +324,8 @@ async fn decide<W: AsyncWrite + Unpin>(
             permission,
             ask.push_ticket.as_deref(),
         )?;
+        // Approved at the computer: paired for good, even if it was a guest (F44).
+        devices::set_expiry(&db, &device_id, None)?;
         audit::record(
             &db,
             &device_id,

@@ -79,3 +79,10 @@ export const unreachable = (s?: Status | null): Plain => ({
 	body: 'It may be off or offline. This page tries again by itself; your chat is kept in this browser.',
 	retry: true
 });
+
+/** A link the page can't read: part of it is missing or changed. Trying again won't help. */
+export const invalidLink: Plain = {
+	title: "This link isn't valid",
+	body: 'Part of it may be missing. Open the whole link again, or ask for a new one.',
+	retry: false
+};

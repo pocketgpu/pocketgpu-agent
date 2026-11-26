@@ -11,7 +11,7 @@ use pocketgpu_proto::files::{CHUNK, Response, Root};
 use pocketgpu_proto::{Error, ErrorCode, write_frame};
 use tokio::io::AsyncReadExt;
 
-use super::browse::{error, is_job_log, rules};
+use super::browse::{Closed, error, is_job_log, rules};
 use super::offers;
 use super::resolve::{self, Refused};
 use super::still::Still;
@@ -20,7 +20,13 @@ use crate::daemon::state::Agent;
 use crate::store::db::now_ms;
 
 /// An opened file and what the audit log calls it (`output/cat.png`).
-fn open(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Opened, Error> {
+fn open(
+    agent: &Agent,
+    device: &str,
+    root: Root,
+    path: &str,
+    closed: &Closed,
+) -> Result<Opened, Error> {
     let refused = |e: Refused| e.to_error();
     match root {
         Root::Offers => {
@@ -48,10 +54,10 @@ fn open(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Opened, E
         }
         Root::JobLogs if !is_job_log(path) => Err(error(ErrorCode::NotFound, "not a job log")),
         _ => {
-            let rules = rules(agent, root)?;
+            let rules = rules(agent, root, closed)?;
             let (file, meta) = rules.open(path).map_err(refused)?;
             let label = match root {
-                Root::Shared(_) => rules
+                Root::Shared(_) | Root::SharedId(_) => rules
                     .root
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
@@ -63,7 +69,7 @@ fn open(agent: &Agent, device: &str, root: Root, path: &str) -> Result<Opened, E
                 file,
                 meta,
                 label: format!("{label}/{path}"),
-                shared: matches!(root, Root::Shared(_)).then(|| rules.root.clone()),
+                shared: root.is_shared().then(|| rules.root.clone()),
             })
         }
     }
@@ -91,9 +97,10 @@ pub async fn open_file(
     device: &str,
     root: Root,
     path: String,
+    closed: Closed,
 ) -> Result<Opened, Error> {
     let (agent, device) = (agent.clone(), device.to_string());
-    match tokio::task::spawn_blocking(move || open(&agent, &device, root, &path)).await {
+    match tokio::task::spawn_blocking(move || open(&agent, &device, root, &path, &closed)).await {
         Ok(opened) => opened,
         Err(e) => Err(error(ErrorCode::Internal, e.to_string())),
     }

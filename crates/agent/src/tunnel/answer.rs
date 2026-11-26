@@ -31,8 +31,6 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub struct Answers(Mutex<HashMap<(String, u64), Arc<Answer>>>);
 
 pub struct Answer {
-    /// The server's HTTP status.
-    status: u16,
     state: Mutex<State>,
     /// Bumped on every change, to wake readers.
     changed: watch::Sender<u64>,
@@ -42,6 +40,8 @@ pub struct Answer {
 
 #[derive(Default)]
 struct State {
+    /// The server's HTTP status, once it answers: loading a model can take a minute.
+    status: Option<u16>,
     bytes: Vec<u8>,
     /// `Some` once the reply ended: `Ok`, or why it stopped.
     end: Option<Result<(), Error>>,
@@ -49,9 +49,8 @@ struct State {
 }
 
 impl Answer {
-    fn new(status: u16) -> Arc<Self> {
+    fn new() -> Arc<Self> {
         Arc::new(Self {
-            status,
             state: Mutex::default(),
             changed: watch::channel(0).0,
             task: Mutex::default(),
@@ -90,10 +89,15 @@ impl Answer {
         });
     }
 
+    /// Stops writing it down; whoever is reading it hears so.
     fn stop(&self) {
         if let Some(task) = self.task.lock().expect("answer lock poisoned").take() {
             task.abort();
         }
+        self.finish(Err(Error::new(
+            ErrorCode::Unknown,
+            "the answer was stopped",
+        )));
     }
 
     fn gone(&self) -> bool {
@@ -164,9 +168,11 @@ pub(super) async fn serve(
                 path,
                 body,
             };
-            let res = request(http, &base, call, &name).await?;
-            let answer = Answer::new(res.status().as_u16());
-            let task = tokio::spawn(write_down(answer.clone(), res, name));
+            // Kept before the server answers, as a model may take a minute to load: a phone
+            // that loses its connection meanwhile picks the answer up too.
+            let answer = Answer::new();
+            let ask = write_down(answer.clone(), http.clone(), base, call, name);
+            let task = tokio::spawn(ask);
             *answer.task.lock().expect("answer lock poisoned") = Some(task.abort_handle());
             agent.answers.insert((phone, id), answer.clone());
             read_out(&answer, 0, send).await
@@ -192,8 +198,20 @@ pub(super) async fn serve(
     }
 }
 
-/// Reads the server's reply to the end, whoever is listening.
-async fn write_down(answer: Arc<Answer>, mut res: reqwest::Response, name: String) {
+/// Asks the server and reads its reply to the end, whoever is listening.
+async fn write_down(
+    answer: Arc<Answer>,
+    http: reqwest::Client,
+    base: String,
+    call: Call<'static>,
+    name: String,
+) {
+    let mut res = match request(&http, &base, call, &name).await {
+        Ok(res) => res,
+        Err(e) => return answer.finish(Err(e)),
+    };
+    let status = res.status().as_u16();
+    answer.update(|s| s.status = Some(status));
     loop {
         match res.chunk().await {
             Ok(Some(bytes)) => {
@@ -210,27 +228,30 @@ async fn write_down(answer: Arc<Answer>, mut res: reqwest::Response, name: Strin
     }
 }
 
-/// Sends the answer from byte `from`: what is written down, then the rest as it comes.
+/// Sends the answer from byte `from`, once the server has answered: what is written down, then
+/// the rest as it comes.
 async fn read_out(answer: &Answer, from: u64, send: &mut SendStream) -> Result<(), Error> {
     let gone = |_| Error::new(ErrorCode::Unknown, "the phone closed the request");
     let mut at = usize::try_from(from).unwrap_or(usize::MAX);
     let mut changed = answer.changed.subscribe();
-    write_frame(
-        send,
-        &ToPhone::Head {
-            status: answer.status,
-        },
-    )
-    .await
-    .map_err(gone)?;
+    let mut head = false;
     loop {
         // Seen before reading, so a change after the read wakes the wait below.
         changed.borrow_and_update();
-        let (part, end) = {
+        let (status, part, end) = {
             let s = answer.state.lock().expect("answer lock poisoned");
-            let part = s.bytes.get(at..).map(<[u8]>::to_vec).unwrap_or_default();
-            (part, s.end.clone())
+            let part = match s.status {
+                Some(_) => s.bytes.get(at..).map(<[u8]>::to_vec).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            (s.status, part, s.end.clone())
         };
+        if !head && let Some(status) = status {
+            write_frame(send, &ToPhone::Head { status })
+                .await
+                .map_err(gone)?;
+            head = true;
+        }
         at += part.len();
         for piece in part.chunks(CHUNK) {
             write_frame(send, &ToPhone::Chunk(piece.to_vec()))
@@ -238,7 +259,8 @@ async fn read_out(answer: &Answer, from: u64, send: &mut SendStream) -> Result<(
                 .map_err(gone)?;
         }
         match end {
-            Some(Ok(())) => return write_frame(send, &ToPhone::End).await.map_err(gone),
+            Some(Ok(())) if head => return write_frame(send, &ToPhone::End).await.map_err(gone),
+            Some(Ok(())) => return Err(Error::new(ErrorCode::Internal, "the answer stopped")),
             Some(Err(e)) => return Err(e),
             None => {
                 if changed.changed().await.is_err() {
@@ -257,9 +279,9 @@ mod tests {
     fn keeps_a_few_answers_per_phone() {
         let answers = Answers::default();
         for id in 0..10 {
-            answers.insert(("a".into(), id), Answer::new(200));
+            answers.insert(("a".into(), id), Answer::new());
         }
-        answers.insert(("b".into(), 0), Answer::new(200));
+        answers.insert(("b".into(), 0), Answer::new());
         assert!(answers.get(&("a".into(), 0)).is_none());
         assert!(answers.get(&("a".into(), 1)).is_none());
         assert!(answers.get(&("a".into(), 9)).is_some());
@@ -272,7 +294,7 @@ mod tests {
 
     #[test]
     fn stops_a_runaway_answer() {
-        let a = Answer::new(200);
+        let a = Answer::new();
         assert!(a.push(b"hello"));
         assert!(!a.push(&vec![0; MAX_BYTES]));
         let s = a.state.lock().unwrap();

@@ -5,6 +5,7 @@
 
 mod apps;
 mod clip;
+mod compat;
 mod docker;
 mod events;
 mod files;
@@ -29,7 +30,7 @@ use pocketgpu_proto::pairing::{PairCode, PairInput, proof};
 use pocketgpu_proto::{FrameError, Platform, Sample, alpn, read_frame, write_frame};
 use serde::{Serialize, de::DeserializeOwned};
 
-pub use apps::Forward;
+pub use apps::{Forward, Reach};
 pub use clip::ClipContent;
 pub use docker::ContainerLog;
 pub use events::EventStream;
@@ -149,6 +150,7 @@ impl Client {
             clip: Shared::default(),
             apps: Shared::default(),
             screen: Shared::default(),
+            shifted: Arc::default(),
         })
     }
 
@@ -250,6 +252,8 @@ pub struct Machine {
     clip: Shared,
     apps: Shared,
     screen: Shared,
+    /// Its agent reads control requests shifted by one ([`compat`]).
+    shifted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// A connection for one more protocol, opened on first use and then shared by every
@@ -284,8 +288,21 @@ impl Machine {
         connection_type(&self.control)
     }
 
+    /// The agent version this machine was last seen with, until it says so on this
+    /// connection: one that reads requests shifted by one ([`compat`]) is sent only those
+    /// that mean the same there.
+    pub fn knows_version(&self, agent_version: &str) {
+        self.shifted.store(
+            compat::shifted(agent_version),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
     /// Sends one control request and waits for its reply.
     pub async fn control(&self, req: control::Request) -> Result<control::Response, ClientError> {
+        if self.shifted.load(std::sync::atomic::Ordering::Relaxed) && !compat::same_there(&req) {
+            return Err(ClientError::Unsupported);
+        }
         match request(&self.control, &req).await? {
             control::Response::Error(e) => Err(ClientError::Remote(e)),
             other => Ok(other),
@@ -301,7 +318,10 @@ impl Machine {
             proto: pocketgpu_proto::msg::PROTO_VERSION,
         };
         match self.control(req).await? {
-            control::Response::MachineInfo(info) => Ok(info),
+            control::Response::MachineInfo(info) => {
+                self.knows_version(&info.agent_version);
+                Ok(info)
+            }
             _ => Err(ClientError::NoReply),
         }
     }
@@ -314,7 +334,10 @@ impl Machine {
             proto: pocketgpu_proto::msg::PROTO_VERSION,
         };
         match self.control(req).await? {
-            control::Response::Status(status) => Ok(*status),
+            control::Response::Status(status) => {
+                self.knows_version(&status.info.agent_version);
+                Ok(*status)
+            }
             _ => Err(ClientError::NoReply),
         }
     }

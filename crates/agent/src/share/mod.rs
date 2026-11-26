@@ -24,20 +24,24 @@ use crate::daemon::state::Agent;
 use crate::store::db::now_ms;
 use store::Share;
 
-/// Wrong proofs one key may send before it is refused without counting.
+/// Wrong proofs one key may send before it is refused, for an hour after its last one.
+///
+/// Wrong proofs count against their own key only. They never end a share or refuse other
+/// keys: a link's secret is 32 random bytes, so no number of tries guesses it, while anyone
+/// holding one old link knows this computer and can make keys for free. Counting per share or
+/// for everyone would only let them end the owner's new links or turn every new guest away.
 pub const WRONG_PER_KEY: u8 = 2;
-/// Wrong proofs for one share before it ends, so its secret can't be guessed slowly.
-pub const WRONG_PER_SHARE: u8 = 8;
-/// Wrong proofs for all shares in an hour before every claim is refused for that hour.
-pub const WRONG_PER_HOUR: usize = 50;
+/// How long a key that sent too many wrong proofs stays refused.
+pub const WRONG_FOR: Duration = Duration::from_secs(3600);
+/// Keys remembered for wrong proofs at most, so fresh keys can't fill memory.
+const WRONG_KEYS_KEPT: usize = 4096;
 
 /// In memory only: forgotten on restart, which only resets the counts.
 #[derive(Debug, Default)]
 pub struct Runtime {
     busy: Mutex<HashSet<u64>>,
-    wrong_by_key: Mutex<HashMap<PublicKey, u8>>,
-    wrong_by_share: Mutex<HashMap<u64, u8>>,
-    wrong_recent: Mutex<Vec<Instant>>,
+    /// Each key's wrong proofs and when its last one came.
+    wrong_by_key: Mutex<HashMap<PublicKey, (u8, Instant)>>,
 }
 
 impl Runtime {
@@ -50,33 +54,40 @@ impl Runtime {
         })
     }
 
-    /// Whether this key may try a claim now.
+    /// Whether this key may try a claim now: only its own wrong proofs count.
     pub fn may_try(&self, key: &PublicKey) -> bool {
         let by_key = self.wrong_by_key.lock().expect("share lock poisoned");
-        if by_key.get(key).copied().unwrap_or(0) >= WRONG_PER_KEY {
-            return false;
-        }
-        let mut recent = self.wrong_recent.lock().expect("share lock poisoned");
-        recent.retain(|t| t.elapsed() < Duration::from_secs(3600));
-        recent.len() < WRONG_PER_HOUR
+        !by_key
+            .get(key)
+            .is_some_and(|(n, last)| *n >= WRONG_PER_KEY && last.elapsed() < WRONG_FOR)
     }
 
-    /// Counts a wrong proof; true when the share has had too many and must end.
-    pub fn wrong(&self, key: PublicKey, share: u64) -> bool {
-        *self
-            .wrong_by_key
-            .lock()
-            .expect("share lock poisoned")
-            .entry(key)
-            .or_default() += 1;
-        self.wrong_recent
-            .lock()
-            .expect("share lock poisoned")
-            .push(Instant::now());
-        let mut by_share = self.wrong_by_share.lock().expect("share lock poisoned");
-        let n = by_share.entry(share).or_default();
-        *n += 1;
-        *n >= WRONG_PER_SHARE
+    /// Counts a wrong proof against this key, and nothing else (see [`WRONG_PER_KEY`]).
+    pub fn wrong(&self, key: PublicKey) {
+        let mut by_key = self.wrong_by_key.lock().expect("share lock poisoned");
+        let now = Instant::now();
+        if let Some((n, last)) = by_key.get_mut(&key) {
+            if last.elapsed() >= WRONG_FOR {
+                *n = 0;
+            }
+            *n = n.saturating_add(1);
+            *last = now;
+            return;
+        }
+        if by_key.len() >= WRONG_KEYS_KEPT {
+            by_key.retain(|_, (_, last)| last.elapsed() < WRONG_FOR);
+        }
+        // Still full: the key whose last wrong proof is oldest makes room, so every key is
+        // counted and refused after its second.
+        if by_key.len() >= WRONG_KEYS_KEPT
+            && let Some(oldest) = by_key
+                .iter()
+                .min_by_key(|(_, (_, last))| *last)
+                .map(|(k, _)| *k)
+        {
+            by_key.remove(&oldest);
+        }
+        by_key.insert(key, (1, now));
     }
 }
 
@@ -232,4 +243,87 @@ pub fn start_sweeper(agent: Arc<Agent>) {
             tokio::time::sleep(wait).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroh::SecretKey;
+
+    fn key() -> PublicKey {
+        SecretKey::generate().public()
+    }
+
+    #[test]
+    fn wrong_proofs_stop_only_their_own_key() {
+        let rt = Runtime::default();
+        // Far more wrong proofs than any old limit, each pair from a fresh key.
+        for _ in 0..200 {
+            let k = key();
+            assert!(rt.may_try(&k));
+            rt.wrong(k);
+            rt.wrong(k);
+            assert!(!rt.may_try(&k), "a key with 2 wrong proofs may try again");
+        }
+        assert!(
+            rt.may_try(&key()),
+            "other keys' wrong proofs turned a new guest away"
+        );
+    }
+
+    #[test]
+    fn a_refused_key_may_try_again_after_an_hour() {
+        let rt = Runtime::default();
+        let k = key();
+        let Some(long_ago) = Instant::now().checked_sub(WRONG_FOR) else {
+            return; // this clock can't go back an hour yet
+        };
+        rt.wrong_by_key
+            .lock()
+            .unwrap()
+            .insert(k, (WRONG_PER_KEY, long_ago));
+        assert!(rt.may_try(&k));
+        rt.wrong(k);
+        assert!(rt.may_try(&k), "an old count wasn't started again");
+    }
+
+    #[test]
+    fn fresh_keys_cannot_fill_memory() {
+        let rt = Runtime::default();
+        for _ in 0..WRONG_KEYS_KEPT + 50 {
+            rt.wrong(key());
+        }
+        assert!(rt.wrong_by_key.lock().unwrap().len() <= WRONG_KEYS_KEPT);
+    }
+
+    #[test]
+    fn a_full_list_still_refuses_a_new_key() {
+        let rt = Runtime::default();
+        let now = Instant::now();
+        let Some(earlier) = now.checked_sub(Duration::from_secs(1)) else {
+            return; // this clock can't go back a second yet
+        };
+        let first = key();
+        {
+            let mut by_key = rt.wrong_by_key.lock().unwrap();
+            // The oldest, still within its hour, so only eviction makes room.
+            by_key.insert(first, (1, earlier));
+            while by_key.len() < WRONG_KEYS_KEPT {
+                by_key.insert(key(), (1, now));
+            }
+        }
+        let k = key();
+        rt.wrong(k);
+        rt.wrong(k);
+        assert!(
+            !rt.may_try(&k),
+            "a new key wasn't counted once the list was full"
+        );
+        let by_key = rt.wrong_by_key.lock().unwrap();
+        assert_eq!(by_key.len(), WRONG_KEYS_KEPT);
+        assert!(
+            !by_key.contains_key(&first),
+            "the oldest key wasn't the one dropped"
+        );
+    }
 }

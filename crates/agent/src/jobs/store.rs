@@ -67,8 +67,14 @@ pub fn create(db: &Connection, start: &JobStart, logs_dir: &Path) -> Result<(u64
     Ok((id, log))
 }
 
-/// Ends a running job and returns its new state. Ended jobs are left as they are.
-pub fn end(db: &Connection, id: u64, exit_code: Option<i32>, stopped: bool) -> Result<JobState> {
+/// Ends a running job at `at_ms` and returns its new state. Ended jobs are left as they are.
+pub fn end(
+    db: &Connection,
+    id: u64,
+    exit_code: Option<i32>,
+    stopped: bool,
+    at_ms: i64,
+) -> Result<JobState> {
     let state = end_state(exit_code, stopped);
     let log_bytes = log_path(db, id)?
         .and_then(|p| std::fs::metadata(p).ok())
@@ -79,7 +85,7 @@ pub fn end(db: &Connection, id: u64, exit_code: Option<i32>, stopped: bool) -> R
         params![
             state_str(state),
             exit_code,
-            now_ms(),
+            at_ms,
             log_bytes as i64,
             id as i64
         ],
@@ -87,10 +93,10 @@ pub fn end(db: &Connection, id: u64, exit_code: Option<i32>, stopped: bool) -> R
     Ok(state)
 }
 
-pub fn mark_lost(db: &Connection, id: u64) -> Result<()> {
+pub fn mark_lost(db: &Connection, id: u64, at_ms: i64) -> Result<()> {
     db.execute(
         "UPDATE jobs SET state = 'lost', ended_at = ?1 WHERE job_id = ?2 AND state = 'running'",
-        params![now_ms(), id as i64],
+        params![at_ms, id as i64],
     )?;
     Ok(())
 }
@@ -270,11 +276,17 @@ mod tests {
         assert!(log.ends_with(format!("{a}.log")));
         let (b, _) = create(&db, &start("eval.py"), dir.path()).unwrap();
         let (c, _) = create(&db, &start("other"), dir.path()).unwrap();
-        assert_eq!(end(&db, a, Some(0), false).unwrap(), JobState::Finished);
-        assert_eq!(end(&db, b, Some(1), false).unwrap(), JobState::Crashed);
+        assert_eq!(
+            end(&db, a, Some(0), false, now_ms()).unwrap(),
+            JobState::Finished
+        );
+        assert_eq!(
+            end(&db, b, Some(1), false, now_ms()).unwrap(),
+            JobState::Crashed
+        );
         assert_eq!(lose_running(&db).unwrap(), 1);
         // An ended job doesn't change again.
-        end(&db, a, Some(9), false).unwrap();
+        end(&db, a, Some(9), false, now_ms()).unwrap();
         let jobs = list(&db, 10, None).unwrap();
         assert_eq!(jobs.iter().map(|j| j.id).collect::<Vec<_>>(), vec![c, b, a]);
         assert_eq!(jobs[0].state, JobState::Lost);
@@ -315,7 +327,7 @@ mod tests {
         let db = open_in_memory().unwrap();
         let (id, log) = create(&db, &start("old"), dir.path()).unwrap();
         std::fs::write(&log, "x").unwrap();
-        end(&db, id, Some(0), false).unwrap();
+        end(&db, id, Some(0), false, now_ms()).unwrap();
         db.execute("UPDATE jobs SET ended_at = 0", []).unwrap();
         prune(&db).unwrap();
         assert!(!log.exists());

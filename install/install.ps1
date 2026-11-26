@@ -2,7 +2,7 @@
 #   irm https://pocketgpu.app/install.ps1 | iex
 #
 # Installs pocketgpu.exe (and the `pgpu` alias) into %LOCALAPPDATA%\PocketGPU\bin, adds it to
-# your PATH and starts the agent at login, then offers the PocketGPU app and pairing a phone.
+# your PATH and starts the agent at login, then offers pairing a phone.
 # No Administrator. Settings, all optional:
 #   $env:PGPU_VERSION = 'v1.2.0'      a release tag instead of the latest
 #   $env:PGPU_INSTALL_DIR = 'C:\path' instead of %LOCALAPPDATA%\PocketGPU\bin

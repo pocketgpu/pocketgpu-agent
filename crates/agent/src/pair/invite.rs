@@ -54,6 +54,30 @@ struct Open {
     wrong: Vec<PublicKey>,
 }
 
+impl Open {
+    fn wrong_from(&self, device: &PublicKey) -> usize {
+        self.wrong.iter().filter(|k| *k == device).count()
+    }
+
+    /// Where the invite this proof is for is, unless `device` sent too many wrong ones.
+    fn find(
+        &mut self,
+        endpoint: &PublicKey,
+        device: &PublicKey,
+        given: &[u8; 32],
+    ) -> Option<usize> {
+        if self.wrong_from(device) >= MAX_WRONG_PER_KEY {
+            return None;
+        }
+        let now = Instant::now();
+        self.invites.retain(|i| i.join_until > now);
+        self.invites.iter().position(|i| {
+            let expected = proof(&i.secret, endpoint.as_bytes(), device.as_bytes());
+            proof_matches(&expected, given)
+        })
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Invites(Mutex<Open>);
 
@@ -98,17 +122,14 @@ impl Invites {
         given: &[u8; 32],
     ) -> Option<Grant> {
         let mut open = self.open();
-        if open.wrong.iter().filter(|k| *k == device).count() >= MAX_WRONG_PER_KEY {
-            return None;
-        }
-        let now = Instant::now();
-        let list = &mut open.invites;
-        list.retain(|i| i.join_until > now);
-        let at = list.iter().position(|i| {
-            let expected = proof(&i.secret, endpoint.as_bytes(), device.as_bytes());
-            proof_matches(&expected, given)
-        })?;
-        Some(list.remove(at).grant)
+        let at = open.find(endpoint, device, given)?;
+        Some(open.invites.remove(at).grant)
+    }
+
+    /// Whether this proof is for an open invite, which stays open: a device paired for good
+    /// is let in as it is, and the invite stays for whoever it was meant for.
+    pub fn matches(&self, endpoint: &PublicKey, device: &PublicKey, given: &[u8; 32]) -> bool {
+        self.open().find(endpoint, device, given).is_some()
     }
 
     /// Forgets the invites `device` made, once it's removed or can no longer lend the computer.
@@ -120,7 +141,8 @@ impl Invites {
     /// every open invite stops working, so guessing one is as hard as guessing a code.
     pub fn missed(&self, device: &PublicKey) {
         let mut open = self.open();
-        if open.invites.is_empty() {
+        // One key alone can't close them: past its own tries it is just refused.
+        if open.invites.is_empty() || open.wrong_from(device) >= MAX_WRONG_PER_KEY {
             return;
         }
         open.wrong.push(*device);
@@ -201,6 +223,25 @@ mod tests {
         }
         assert!(!invites.any_open());
         assert!(invites.take(&endpoint, &device, &good).is_none());
+    }
+
+    #[test]
+    fn one_key_cannot_close_the_invites() {
+        let invites = Invites::default();
+        let secret = [7u8; 32];
+        invites.add(secret, grant()).unwrap();
+        let pest = iroh::SecretKey::from_bytes(&[9; 32]).public();
+        for _ in 0..MAX_WRONG * 3 {
+            invites.missed(&pest);
+        }
+        assert!(invites.any_open());
+        let endpoint = iroh::SecretKey::from_bytes(&[1; 32]).public();
+        let device = iroh::SecretKey::from_bytes(&[2; 32]).public();
+        let good = proof(&secret, endpoint.as_bytes(), device.as_bytes());
+        // Looking doesn't use it up; taking does.
+        assert!(invites.matches(&endpoint, &device, &good));
+        assert_eq!(invites.take(&endpoint, &device, &good), Some(grant()));
+        assert!(!invites.matches(&endpoint, &device, &good));
     }
 
     #[test]

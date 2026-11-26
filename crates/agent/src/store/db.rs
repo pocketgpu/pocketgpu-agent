@@ -144,6 +144,24 @@ const MIGRATIONS: &[M<'static>] = &[
     );
     ",
     ),
+    // A removed action's id is never given to a new one, so a phone or widget still showing
+    // the old action can't run a different command by its id.
+    M::up(
+        "
+    CREATE TABLE actions_new (
+        action_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name      TEXT NOT NULL UNIQUE CHECK (length(name) <= 40),
+        command   TEXT NOT NULL,
+        icon      TEXT NOT NULL,
+        risky     INTEGER NOT NULL DEFAULT 0,
+        timeout_s INTEGER NOT NULL DEFAULT 600
+    );
+    INSERT INTO actions_new (action_id, name, command, icon, risky, timeout_s)
+        SELECT action_id, name, command, icon, risky, timeout_s FROM actions;
+    DROP TABLE actions;
+    ALTER TABLE actions_new RENAME TO actions;
+    ",
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -185,5 +203,35 @@ mod tests {
             .validate()
             .unwrap();
         super::open_in_memory().unwrap();
+    }
+
+    #[test]
+    fn actions_keep_their_ids_and_never_reuse_one() {
+        let mut conn = super::Connection::open_in_memory().unwrap();
+        let migrations = super::Migrations::from_slice(super::MIGRATIONS);
+        // A database from before ids stopped being reused (version 6, F48), with two actions.
+        migrations.to_version(&mut conn, 6).unwrap();
+        conn.execute_batch(
+            "INSERT INTO actions (name, command, icon) VALUES ('Status', 'nvidia-smi', 'zap');
+             INSERT INTO actions (name, command, icon) VALUES ('Clean', 'rm -rf x', 'zap');",
+        )
+        .unwrap();
+        migrations.to_latest(&mut conn).unwrap();
+        let kept: (i64, String) = conn
+            .query_row(
+                "SELECT action_id, command FROM actions WHERE name = 'Status'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (1, "nvidia-smi".into()));
+        conn.execute("DELETE FROM actions WHERE action_id = 2", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO actions (name, command, icon) VALUES ('New', 'echo', 'zap')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(conn.last_insert_rowid(), 3);
     }
 }

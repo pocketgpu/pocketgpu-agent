@@ -89,7 +89,7 @@ agent_running() {
 # background, detached from this terminal, until the machine or container stops.
 start_background() {
     log="${XDG_DATA_HOME:-$HOME/.local/share}/pocketgpu/agent.log"
-    if agent_running; then
+    if agent_running && ! stop_background; then
         done_ "already running; stop it and start it again to use $version"
         running=1
         background=1
@@ -111,6 +111,49 @@ start_background() {
         tries=$((tries + 1))
     done
     fail "the agent did not start. Its log: $log"
+}
+
+# Stops the agent this user runs in the background, which keeps its old binary; false when it
+# can't be found (then it is left alone).
+stop_background() {
+    pids="$(agent_pids)"
+    [ -n "$pids" ] || return 1
+    for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+    # It tells connected phones it ended, so give it a while before forcing it.
+    tries=0
+    while [ "$tries" -lt 40 ]; do
+        left=""
+        for pid in $pids; do alive "$pid" && left="$left $pid"; done
+        [ -n "$left" ] || return 0
+        [ "$tries" = 20 ] && for pid in $left; do kill -9 "$pid" 2>/dev/null || true; done
+        sleep 1
+        tries=$((tries + 1))
+    done
+    fail "the running agent did not stop; stop it, then run this again"
+}
+
+# This user's `pocketgpu agent` (or `pgpu agent`) processes, from /proc.
+agent_pids() {
+    uid="$(id -u)"
+    for dir in /proc/[0-9]*; do
+        pid="${dir#/proc/}"
+        comm=""
+        read -r comm 2>/dev/null <"$dir/comm" || continue
+        case "$comm" in pocketgpu | pgpu) ;; *) continue ;; esac
+        [ "$pid" != "$$" ] && [ "$(status_field "$pid" Uid:)" = "$uid" ] || continue
+        [ "$(tr '\0' '\n' 2>/dev/null <"$dir/cmdline" | sed -n 2p)" = agent ] && printf '%s\n' "$pid"
+    done
+    return 0
+}
+
+# Whether process $1 still runs; a zombie (its parent never collected it) doesn't.
+alive() {
+    kill -0 "$1" 2>/dev/null && [ "$(status_field "$1" State:)" != Z ]
+}
+
+# The first value of line $2 in /proc/$1/status (`Uid:`, `State:`); empty without one.
+status_field() {
+    sed -n "s/^$2[[:space:]]*\([^[:space:]]*\).*/\1/p" "/proc/$1/status" 2>/dev/null
 }
 
 # Without lingering, systemd stops the agent when the user's last session ends: on a server
@@ -151,10 +194,15 @@ main() {
         *) fail "this installer is for Linux and macOS; on Windows use install.ps1" ;;
     esac
 
-    case "$(uname -m)" in
+    machine="$(uname -m)"
+    # A Terminal opened with Rosetta says x86_64 on an Apple silicon Mac, which runs the arm64 agent.
+    if [ "$system" = macos ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+        machine=arm64
+    fi
+    case "$machine" in
         x86_64 | amd64) arch="x86_64" ;;
         aarch64 | arm64) arch="aarch64" ;;
-        *) fail "unsupported CPU $(uname -m); PocketGPU runs on x86_64 and arm64" ;;
+        *) fail "unsupported CPU $machine; PocketGPU runs on x86_64 and arm64" ;;
     esac
     if [ "$system" = macos ]; then
         [ "$arch" = aarch64 ] || fail "the macOS agent needs an Apple silicon Mac (M1 or newer)"
@@ -208,15 +256,26 @@ main() {
 
     step "Starting the agent"
     running=""
+    # Run from a phone's terminal, the terminal closes when the old agent stops: finish anyway,
+    # or the agent stays stopped.
+    trap '' HUP
     if [ -n "${PGPU_NO_SERVICE:-}" ]; then
         done_ "skipped (PGPU_NO_SERVICE)"
     elif [ "$system" = macos ]; then
+        # Stops a running agent and starts the new one.
         state="$("$INSTALL_DIR/pocketgpu" service install --json | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
         [ "$state" = "active" ] || fail "the agent did not start ($state). Check with: pgpu doctor"
         running=1
         done_ "running, and starts when you log in"
     elif has systemctl && user_systemd; then
+        # `service install` starts a stopped agent but leaves a running one on its old binary.
+        was_running=""
+        systemctl --user is-active --quiet pocketgpu.service && was_running=1
         state="$("$INSTALL_DIR/pocketgpu" service install --json | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+        if [ -n "$was_running" ] && [ "$state" = "active" ]; then
+            systemctl --user restart pocketgpu.service || fail "the agent did not restart. Check with: pgpu doctor"
+            state="$("$INSTALL_DIR/pocketgpu" service status --json | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+        fi
         [ "$state" = "active" ] || fail "the agent did not start ($state). Check with: pgpu doctor"
         running=1
         if [ "$(loginctl show-user "${USER:-$(id -un)}" --property=Linger --value 2>/dev/null)" = "no" ]; then
@@ -232,6 +291,7 @@ main() {
     else
         start_background
     fi
+    trap - HUP
 
     printf '\n  %s%s PocketGPU %s is installed.%s\n' "$GREEN" "$TICK" "$version" "$RESET"
 

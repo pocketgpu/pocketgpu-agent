@@ -15,6 +15,19 @@ export function readFragment(hash: string): Fragment | null {
 	return { raw, id: storageId(raw) };
 }
 
+/** Whether opening the link failed because the link itself can't be read (cut short, changed,
+ *  or from a newer PocketGPU), which trying again won't fix. These are the wasm's words: the
+ *  proto's BadLink, a computer key that isn't one, this browser's key. Anything else (a relay
+ *  that didn't answer, "unreachable: …", or the page's own files not loading) may pass. */
+export function badLink(error: unknown): boolean {
+	const m = error instanceof Error ? error.message : String(error);
+	return (
+		m.startsWith('this link') ||
+		m.startsWith("this browser's key") ||
+		m.includes('not a valid public key')
+	);
+}
+
 /** A short, stable name for this link in the browser's storage (not the secret itself). */
 export function storageId(raw: string): string {
 	let h = 0x811c9dc5;

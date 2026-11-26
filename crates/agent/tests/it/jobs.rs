@@ -291,3 +291,73 @@ async fn jobs_are_picked_up_again_after_a_restart() {
     let reply: Option<LocalReply> = read_frame(&mut s).await.unwrap();
     assert!(matches!(reply, Some(LocalReply::Error(_))), "{reply:?}");
 }
+
+/// A job whose end the database refuses for a while (a full disk, say) still ends: the alert
+/// goes out, it no longer counts as running, and the end is written once the database is back.
+#[tokio::test]
+async fn a_job_ends_even_when_the_database_refuses_its_end() {
+    use pocketgpu::jobs::StopError;
+    use pocketgpu_proto::local::{JobStart, Request as Local, Response as LocalReply};
+    use pocketgpu_proto::{read_frame, write_frame};
+
+    let h = agent_with_socket().await;
+    let mut ended = h.agent.jobs.subscribe();
+    let mut s = pocketgpu::ipc::client::connect(&h.agent.paths)
+        .await
+        .unwrap();
+    let start = JobStart {
+        name: "train".into(),
+        command: "train.py".into(),
+        cwd: "/".into(),
+        alerts: true,
+    };
+    write_frame(&mut s, &Local::JobStart(start)).await.unwrap();
+    let reply: Option<LocalReply> = read_frame(&mut s).await.unwrap();
+    let Some(LocalReply::JobStarted { id, .. }) = reply else {
+        panic!("expected JobStarted, got {reply:?}");
+    };
+
+    // Writes fail from here on.
+    h.agent
+        .db()
+        .execute_batch("PRAGMA query_only = ON")
+        .unwrap();
+    let end = Local::JobEnd {
+        exit_code: Some(1),
+        stopped: false,
+    };
+    write_frame(&mut s, &end).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(2), read_frame::<_, LocalReply>(&mut s))
+        .await
+        .expect("pgpu run hears back");
+    assert!(matches!(reply, Ok(Some(LocalReply::Ok))), "{reply:?}");
+    let event = tokio::time::timeout(Duration::from_secs(2), ended.recv())
+        .await
+        .expect("the end alert goes out")
+        .unwrap();
+    assert_eq!(
+        (event.id, event.state, event.exit_code),
+        (id, JobState::Crashed, Some(1))
+    );
+    assert!(!h.agent.jobs.is_running(id));
+    assert_eq!(h.agent.jobs.stop(&h.agent, id), Err(StopError::NotRunning));
+
+    h.agent
+        .db()
+        .execute_batch("PRAGMA query_only = OFF")
+        .unwrap();
+    let mut state = JobState::Running;
+    for _ in 0..50 {
+        state = store::get(&h.agent.db(), id)
+            .unwrap()
+            .unwrap()
+            .0
+            .summary
+            .state;
+        if state != JobState::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(state, JobState::Crashed);
+}

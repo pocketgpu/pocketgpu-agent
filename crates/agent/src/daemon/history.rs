@@ -21,6 +21,7 @@ pub fn span_ms(range: Range) -> i64 {
 
 /// Points for `gpu` over `range` ending at `now_ms`, oldest first. Each point covers one
 /// bucket: the lowest minimum, mean average, highest maximum and peaks of its minutes.
+/// Minutes after `now_ms`, written while the clock was ahead, are left out.
 pub fn query(db: &Connection, range: Range, gpu: u32, now_ms: i64) -> Result<Vec<MetricMinute>> {
     let span = span_ms(range);
     // Whole minutes, so buckets line up with the stored rows.
@@ -28,10 +29,10 @@ pub fn query(db: &Connection, range: Range, gpu: u32, now_ms: i64) -> Result<Vec
     let mut stmt = db.prepare(
         "SELECT (at / ?1) * ?1 AS t, min(util_min), avg(util_avg), max(util_max),
                 max(vram_max_mb), max(temp_max_c)
-         FROM metrics_1m WHERE gpu = ?2 AND at >= ?3
+         FROM metrics_1m WHERE gpu = ?2 AND at >= ?3 AND at <= ?4
          GROUP BY t ORDER BY t",
     )?;
-    let rows = stmt.query_map(params![bucket, gpu, now_ms - span], |r| {
+    let rows = stmt.query_map(params![bucket, gpu, now_ms - span, now_ms], |r| {
         Ok(MetricMinute {
             at_ms: r.get::<_, i64>(0)? as u64,
             gpu,
@@ -53,10 +54,10 @@ pub fn query_system(db: &Connection, range: Range, now_ms: i64) -> Result<Vec<Sy
         "SELECT (at / ?1) * ?1 AS t, min(cpu_min), avg(cpu_avg), max(cpu_max),
                 min(ram_min), avg(ram_avg), max(ram_max),
                 min(disk_min), avg(disk_avg), max(disk_max)
-         FROM metrics_system_1m WHERE at >= ?2
+         FROM metrics_system_1m WHERE at >= ?2 AND at <= ?3
          GROUP BY t ORDER BY t",
     )?;
-    let rows = stmt.query_map(params![bucket, now_ms - span], |r| {
+    let rows = stmt.query_map(params![bucket, now_ms - span, now_ms], |r| {
         Ok(SystemMinute {
             at_ms: r.get::<_, i64>(0)? as u64,
             cpu_min: r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u8,
@@ -123,6 +124,26 @@ mod tests {
         let p = &points[points.len() / 2];
         assert_eq!((p.util_min, p.util_max, p.util_avg), (10, 90, 50));
         assert_eq!(p.temp_max_c, 52);
+    }
+
+    #[test]
+    fn minutes_from_a_clock_that_was_ahead_are_left_out() {
+        let db = open_in_memory().unwrap();
+        let now = 1_000 * MINUTE;
+        insert(&db, now - MINUTE, 0, 10, 50);
+        insert(&db, now + 8 * 60 * MINUTE, 0, 99, 90);
+        db.execute(
+            "INSERT INTO metrics_system_1m (at, cpu_min, cpu_avg, cpu_max, ram_min, ram_avg,
+                ram_max, disk_min, disk_avg, disk_max) VALUES (?1, 1, 1, 1, 1, 1, 1, 1, 1, 1)",
+            [now + 8 * 60 * MINUTE],
+        )
+        .unwrap();
+        let points = query(&db, Range::H1, 0, now).unwrap();
+        assert_eq!(
+            points.iter().map(|p| p.util_max).collect::<Vec<_>>(),
+            vec![10]
+        );
+        assert!(query_system(&db, Range::H1, now).unwrap().is_empty());
     }
 
     #[test]

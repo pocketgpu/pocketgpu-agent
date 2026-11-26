@@ -248,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    fn a_removed_actions_id_never_names_a_new_one() {
+        // A phone or widget still showing the removed action must not run the new one by id.
+        let db = crate::store::db::open_in_memory().unwrap();
+        create(&db, &valid("Status")).unwrap();
+        let old = create(&db, &valid("Check GPU")).unwrap();
+        delete(&db, old.id).unwrap();
+        let new = create(&db, &valid("Clean scratch")).unwrap();
+        assert_ne!(new.id, old.id);
+        assert!(get(&db, old.id).unwrap().is_none());
+    }
+
+    #[test]
     fn runs_are_listed_newest_first_and_pruned() {
         let db = crate::store::db::open_in_memory().unwrap();
         let a = create(&db, &valid("Status")).unwrap();

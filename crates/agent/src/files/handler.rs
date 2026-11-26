@@ -1,7 +1,8 @@
 //! `pgpu/files/1` (F40): one request per bidirectional stream. Every request is checked
 //! against the device's permission as it is now: View for job logs, Control for shared
 //! folders, the Inbox and offers, Shell (and the terminal switch) for everything else.
-//! Guests (F44) may send to the Inbox but not open it: it holds what others sent before.
+//! Guests (F44) may send to the Inbox but not open it, also not inside a shared folder
+//! that holds it: it holds what others sent before.
 //! Each device runs at most 4 transfers at once, and on the default relays big files wait
 //! for a direct link (FR-007).
 
@@ -97,13 +98,19 @@ async fn handle(
             "you can send files to this machine's Inbox; only its owner can open it",
         )));
     }
+    // Nor inside a shared folder (`Downloads` holds it).
+    let closed = if guest && !matches!(req, Request::Put { .. }) {
+        browse::inbox_closed(agent).await
+    } else {
+        browse::Closed::default()
+    };
     match req {
         Request::Overview => {
             let permission = agent.permission_of(&peer.key);
             let agent = agent.clone();
             // Counting a folder can wait on the system (macOS asking to allow Documents):
             // the folders are counted first, each for a moment at most, then the rest is built.
-            let mut counts = count_folders(&agent).await;
+            let mut counts = count_folders(&agent, &closed).await;
             if guest {
                 counts.inbox = 0;
             }
@@ -116,13 +123,13 @@ async fn handle(
             })
         }
         Request::List { root, path, offset } => {
-            Some(browse::list(agent, &device, root, path, offset).await)
+            Some(browse::list(agent, &device, root, path, offset, closed).await)
         }
         Request::Get { root, path, from } => {
             let Some(_slot) = Slot::take(&device) else {
                 return Some(Response::Error(too_many()));
             };
-            let opened = match get::open_file(agent, &device, root, path).await {
+            let opened = match get::open_file(agent, &device, root, path, closed).await {
                 Ok(o) => o,
                 Err(e) => return Some(Response::Error(e)),
             };
@@ -192,13 +199,13 @@ fn off_overview(agent: &Agent) -> Overview {
 const COUNT_WAIT: Duration = Duration::from_secs(2);
 
 /// The file counts of the shared folders (in order) and the Inbox; 0 for one that didn't open
-/// in time.
+/// in time, and for one that is closed to the device (a guest's Inbox shared).
 struct Counts {
     shared: Vec<u32>,
     inbox: u32,
 }
 
-async fn count_folders(agent: &Agent) -> Counts {
+async fn count_folders(agent: &Agent, closed: &browse::Closed) -> Counts {
     let shared = agent
         .config
         .read()
@@ -207,7 +214,10 @@ async fn count_folders(agent: &Agent) -> Counts {
         .clone();
     let mut counted = Vec::with_capacity(shared.len());
     for p in shared {
-        counted.push(super::count_files_within(p, COUNT_WAIT).await.unwrap_or(0));
+        let (read, closed) = (p.clone(), closed.clone());
+        let count = move || (!closed.holds(&read)).then(|| super::count_files(&read));
+        let n = super::within(p, COUNT_WAIT, count).await.flatten();
+        counted.push(n.unwrap_or(0));
     }
     let inbox = super::count_files_within(super::inbox_dir(agent), COUNT_WAIT)
         .await
@@ -351,6 +361,7 @@ fn describe(req: &Request) -> String {
 pub fn root_name(root: Root) -> String {
     match root {
         Root::Shared(i) => format!("shared {i}"),
+        Root::SharedId(id) => format!("shared {id:016x}"),
         Root::Inbox => "Inbox".into(),
         Root::JobLogs => "job logs".into(),
         Root::Offers => "offers".into(),

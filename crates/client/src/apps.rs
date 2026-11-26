@@ -3,7 +3,10 @@
 //! connection a browser makes there to the app on the machine, over its own iroh connection
 //! (direct when it can be, end-to-end encrypted always). Nothing here listens on the network.
 //! A connection whose first request names another host (a web page that pointed its own
-//! name at 127.0.0.1, DNS rebinding) is turned away before anything reaches the machine.
+//! name at 127.0.0.1, DNS rebinding) is turned away before anything reaches the machine, and
+//! on a phone so is one without the forward's key ([`Reach::Viewer`], `key.rs`).
+
+mod key;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -48,9 +51,15 @@ impl Machine {
     }
 
     /// Puts the app on `port` at `127.0.0.1:local` here: the same port when it is free and
-    /// `local` is `None`, any free one with `Some(0)`. Checks first that the machine lets
-    /// this device in (Shell, apps on) and that the app answers. Stops when dropped.
-    pub async fn forward_app(&self, port: u16, local: Option<u16>) -> Result<Forward, ClientError> {
+    /// `local` is `None`, any free one with `Some(0)`. `reach` says who may use it there;
+    /// open it at [`Forward::url`]. Checks first that the machine lets this device in
+    /// (Shell, apps on) and that the app answers. Stops when dropped.
+    pub async fn forward_app(
+        &self,
+        port: u16,
+        local: Option<u16>,
+        reach: Reach,
+    ) -> Result<Forward, ClientError> {
         let link = Link {
             client: self.client.clone(),
             addr: self.addr.clone(),
@@ -63,19 +72,43 @@ impl Machine {
         let addr = listener
             .local_addr()
             .map_err(|e| ClientError::Connect(e.to_string()))?;
-        let task = tokio::spawn(serve(listener, link, port, addr.port()));
+        let key = (reach == Reach::Viewer).then(|| Arc::new(key::Key::new(addr.port())));
+        let task = tokio::spawn(serve(listener, link, port, addr.port(), key.clone()));
         Ok(Forward {
             local: addr,
+            key,
             task: task.abort_handle(),
         })
     }
+}
+
+/// Who may use a forward's local address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// Only the browser that opened [`Forward::url`]: it then carries the forward's key as
+    /// a cookie. Phones, where every app shares 127.0.0.1.
+    Viewer,
+    /// Any program on this device: a laptop's own tools reach Jupyter at localhost:8888.
+    Anyone,
 }
 
 /// An app put at a local address; stops listening, and ends its connections, when dropped.
 #[derive(Debug)]
 pub struct Forward {
     pub local: SocketAddr,
+    key: Option<Arc<key::Key>>,
     task: AbortHandle,
+}
+
+impl Forward {
+    /// The address a browser opens to start at `path` (`/`, Jupyter's `/?token=…`); with
+    /// [`Reach::Viewer`] it carries the key once.
+    pub fn url(&self, path: &str) -> String {
+        match &self.key {
+            Some(k) => format!("http://{}{}", self.local, k.entry(path)),
+            None => format!("http://{}{path}", self.local),
+        }
+    }
 }
 
 impl Drop for Forward {
@@ -141,7 +174,13 @@ const HEAD_BYTES: usize = 32 * 1024;
 /// How long a browser has to send its first request on a new connection.
 const HEAD_WAIT: Duration = Duration::from_secs(60);
 
-async fn serve(listener: TcpListener, link: Link, port: u16, local: u16) {
+async fn serve(
+    listener: TcpListener,
+    link: Link,
+    port: u16,
+    local: u16,
+    key: Option<Arc<key::Key>>,
+) {
     // Every connection's task ends with this one: dropping a JoinSet aborts them.
     let mut pipes = JoinSet::new();
     loop {
@@ -149,16 +188,28 @@ async fn serve(listener: TcpListener, link: Link, port: u16, local: u16) {
             accepted = listener.accept() => {
                 let Ok((mut tcp, _)) = accepted else { continue };
                 let link = link.clone();
+                let key = key.clone();
                 pipes.spawn(async move {
                     let head = match tokio::time::timeout(HEAD_WAIT, read_head(&mut tcp)).await {
                         Ok(Some(head)) => head,
                         _ => return,
                     };
-                    if !host_allowed(&head, local) {
-                        let _ = tcp.write_all(refused().as_bytes()).await;
+                    // Only the headers are read here: a body may follow them already.
+                    let top = &head[..head_end(&head)];
+                    let answer = if !host_allowed(top, local) {
+                        Some(refused())
+                    } else {
+                        match key.as_deref().map(|k| k.check(top)) {
+                            Some(key::Verdict::Answer(a)) => Some(a),
+                            Some(key::Verdict::Pass) | None => None,
+                        }
+                    };
+                    if let Some(answer) = answer {
+                        let _ = tcp.write_all(answer.as_bytes()).await;
                         let _ = tcp.shutdown().await;
                         return;
                     }
+                    let head = key::without_keys(head);
                     if let Ok((stream, _conn)) = link.open(port).await {
                         pipe(tcp, head, stream).await;
                     }
@@ -198,6 +249,14 @@ async fn read_head(tcp: &mut TcpStream) -> Option<Vec<u8>> {
             return None;
         }
     }
+}
+
+/// Where the first request's headers end in `head`, past the empty line; all of it if they
+/// don't.
+fn head_end(head: &[u8]) -> usize {
+    head.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or(head.len(), |at| at + 4)
 }
 
 /// Whether the request's `Host` is this device itself: `127.0.0.1`, `localhost`, `[::1]` (or
@@ -246,7 +305,7 @@ async fn pipe(tcp: TcpStream, head: Vec<u8>, (mut send, mut recv): Stream) {
 
 #[cfg(test)]
 mod tests {
-    use super::host_allowed;
+    use super::{head_end, host_allowed};
 
     fn req(host: &str) -> Vec<u8> {
         format!("GET / HTTP/1.1\r\nHost: {host}\r\nAccept: */*\r\n\r\n").into_bytes()
@@ -283,5 +342,16 @@ mod tests {
         ));
         let two = b"GET / HTTP/1.1\r\nHost: localhost:8888\r\nHost: evil.example\r\n\r\n";
         assert!(!host_allowed(two, 8888));
+    }
+
+    #[test]
+    fn a_body_read_with_the_head_is_left_out_of_it() {
+        // An upload's first bytes often come in the same read as its headers.
+        let mut head = req("127.0.0.1:8888");
+        let len = head.len();
+        head.extend_from_slice(b"\x89PNG\r\n\x1a\n\xff");
+        assert_eq!(head_end(&head), len);
+        assert!(host_allowed(&head[..head_end(&head)], 8888));
+        assert_eq!(head_end(b"GET / HTTP/1.1\r\n"), 16);
     }
 }

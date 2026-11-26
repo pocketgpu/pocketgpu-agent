@@ -197,3 +197,59 @@ async fn only_a_device_that_still_has_shell_lends_and_never_the_terminal() {
         "a revoked device's invite worked"
     );
 }
+
+/// A device paired for good that proves an invite (its app was reinstalled and lost its
+/// computers, its key kept) is let in with what it has, so it can save the computer again:
+/// never more, never less, never a guest, and the invite stays for whoever it was for.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paired_device_keeps_what_it_has() {
+    let h = Harness::start().await;
+    let owner = h.phone(Some(Permission::Shell)).await;
+    let owner_m = h.connect(&owner).await.unwrap();
+    let viewer = h.phone(Some(Permission::View)).await;
+    let invite = owner_m
+        .create_invite(Permission::Control, 60)
+        .await
+        .unwrap();
+    let PairInput::Qr(qr) = PairInput::parse(&invite.uri).unwrap() else {
+        panic!("the invite should be a QR link");
+    };
+    // The owner has more than the invite gives, the viewer less: each keeps its own.
+    for (phone, kept) in [(&owner, Permission::Shell), (&viewer, Permission::View)] {
+        let before = row(&h, phone);
+        let mut p = phone
+            .client
+            .pair_at(
+                h.router.endpoint().addr(),
+                qr.code,
+                None,
+                info("Sam's iPhone"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            p.next().await.unwrap(),
+            pair::Response::Pending { .. }
+        ));
+        match p.next().await.unwrap() {
+            pair::Response::Approved { permission, .. } => assert_eq!(permission, kept),
+            other => panic!("expected Approved, got {other:?}"),
+        }
+        assert_eq!(row(&h, phone), before, "the device's row changed");
+        assert_eq!(h.agent.permission_of(&phone.key.public()), Some(kept));
+    }
+    assert!(h.agent.pairing.invites.any_open());
+    assert!(joins(&h, &invite.uri).await, "the invite was used up");
+}
+
+/// A device's saved row, but for when it was last seen.
+fn row(h: &Harness, phone: &harness::Phone) -> pocketgpu::store::devices::Device {
+    let key = phone.key.public().to_string();
+    let saved = pocketgpu::store::devices::get(&h.agent.db(), &key)
+        .unwrap()
+        .unwrap();
+    pocketgpu::store::devices::Device {
+        last_seen_ms: None,
+        ..saved
+    }
+}

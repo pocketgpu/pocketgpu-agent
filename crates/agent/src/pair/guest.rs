@@ -117,7 +117,24 @@ pub fn may_join(agent: &Agent, grant: &Grant) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Pairs a device that proved an invite, with the invite's level and end time.
+/// What [`join`] says if a device paired for good got that far: it keeps what it has.
+pub const ALREADY_PAIRED: &str =
+    "this device is already paired with this computer, so it doesn't need an invite";
+
+/// The level of `device` if it is paired for good (no guest). An invite would only make it a
+/// guest, maybe with less, that is removed when the time is up, so the handler lets it in
+/// with this level instead (an app reinstalled with its key kept saves the computer again),
+/// changing nothing and leaving the invite for whoever it was for.
+pub fn paired_for_good(agent: &Agent, device: &PublicKey) -> Option<Permission> {
+    devices::get(&agent.db(), &device.to_string())
+        .ok()
+        .flatten()
+        .filter(|d| d.expires_ms.is_none())
+        .and_then(|d| d.permission.parse().ok())
+}
+
+/// Pairs a device that proved an invite, with the invite's level and end time. Never over a
+/// device paired for good (the handler answers that one itself, so its invite isn't used up).
 pub fn join(
     agent: &Agent,
     device: PublicKey,
@@ -131,6 +148,9 @@ pub fn join(
         .as_deref()
         .filter(|t| t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()));
     let db = agent.db();
+    if devices::get(&db, &id)?.is_some_and(|d| d.expires_ms.is_none()) {
+        anyhow::bail!(ALREADY_PAIRED);
+    }
     devices::upsert(&db, &id, &name, req.platform, grant.permission, ticket)?;
     devices::set_expiry(&db, &id, Some(grant.ends_ms))?;
     audit::record(
@@ -217,6 +237,8 @@ pub fn sweep(agent: &Agent) -> usize {
             agent.pairing.invites.drop_by(&k);
             agent.drop_connections(&k);
         }
+        // A restart, sleep or shut down the guest asked for doesn't happen.
+        agent.power.cancel_for(agent, &d.device_id);
     }
     ended.len()
 }

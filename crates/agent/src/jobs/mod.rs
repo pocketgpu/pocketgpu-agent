@@ -72,14 +72,16 @@ impl Jobs {
         self.ended.subscribe()
     }
 
+    /// Whether the job's `pgpu run` is connected: an entry whose session has gone doesn't count.
     pub fn is_running(&self, id: u64) -> bool {
-        self.running().contains_key(&id)
+        self.running().get(&id).is_some_and(|r| !r.stop.is_closed())
     }
 
     /// Asks the job's `pgpu run` to stop it: SIGTERM, then SIGKILL after 10 seconds.
     pub fn stop(&self, agent: &Agent, id: u64) -> Result<(), StopError> {
-        if let Some(r) = self.running().get(&id) {
-            let _ = r.stop.try_send(());
+        let sent = self.running().get(&id).map(|r| r.stop.try_send(()));
+        // Full: a stop is on its way already. Closed: its session has gone, so it isn't running.
+        if let Some(Ok(()) | Err(mpsc::error::TrySendError::Full(()))) = sent {
             return Ok(());
         }
         match store::get(&agent.db(), id) {
@@ -95,6 +97,70 @@ impl Jobs {
             .filter_map(|(id, r)| r.pgid.map(|g| (*id, g)))
             .collect()
     }
+}
+
+/// A job in [`Jobs::running`] for as long as its session lasts, however the session ends.
+struct Watching<'a> {
+    jobs: &'a Jobs,
+    id: u64,
+    stop: mpsc::Sender<()>,
+}
+
+impl<'a> Watching<'a> {
+    fn start(jobs: &'a Jobs, id: u64, pgid: Option<u32>, stop: mpsc::Sender<()>) -> Self {
+        let entry = Running {
+            stop: stop.clone(),
+            pgid,
+        };
+        jobs.running().insert(id, entry);
+        Self { jobs, id, stop }
+    }
+}
+
+impl Drop for Watching<'_> {
+    fn drop(&mut self) {
+        let mut running = self
+            .jobs
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only its own entry: a session that picked the job up again may have replaced it.
+        if running
+            .get(&self.id)
+            .is_some_and(|r| r.stop.same_channel(&self.stop))
+        {
+            running.remove(&self.id);
+        }
+    }
+}
+
+/// Between tries to record how a job ended while the database refuses.
+const RECORD_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Records how a job ended at `at_ms` (`None`: lost). While the database refuses, a full disk
+/// say, it keeps trying in the background: the job has ended either way, so alerts don't wait.
+fn record_end(agent: &Arc<Agent>, id: u64, end: Option<(Option<i32>, bool)>, at_ms: i64) {
+    let write = move |agent: &Agent| match end {
+        Some((code, stopped)) => store::end(&agent.db(), id, code, stopped, at_ms).map(drop),
+        None => store::mark_lost(&agent.db(), id, at_ms),
+    };
+    let Err(e) = write(agent) else { return };
+    tracing::warn!(
+        job = id,
+        "could not record how the job ended; trying again: {e:#}"
+    );
+    let agent = agent.clone();
+    tokio::spawn(async move {
+        let mut wait = Duration::from_secs(1);
+        loop {
+            tokio::time::sleep(wait).await;
+            if write(&agent).is_ok() {
+                tracing::info!(job = id, "recorded how the job ended");
+                return;
+            }
+            wait = (wait * 2).min(RECORD_RETRY_MAX);
+        }
+    });
 }
 
 /// How long jobs that were running when the agent stopped get to come back (`JobResume`)
@@ -179,49 +245,44 @@ where
     W: AsyncWrite + Unpin,
 {
     let (stop_tx, mut stop_rx) = mpsc::channel(1);
-    agent.jobs.running().insert(
+    let watching = Watching::start(&agent.jobs, id, pgid, stop_tx);
+    let started = Response::JobStarted {
         id,
-        Running {
-            stop: stop_tx,
-            pgid,
-        },
-    );
-    write_frame(
-        &mut w,
-        &Response::JobStarted {
-            id,
-            log_path: log.to_string_lossy().into_owned(),
-        },
-    )
-    .await?;
-
-    let mut from_wrapper = crate::ipc::forward_frames::<_, Request>(reader);
-    let state = loop {
-        tokio::select! {
-            msg = from_wrapper.recv() => match msg {
-                Some(Request::JobProcess { pgid }) => {
-                    if let Some(r) = agent.jobs.running().get_mut(&id) {
-                        r.pgid = Some(pgid);
-                    }
-                }
-                Some(Request::JobEnd { exit_code, stopped }) => {
-                    let state = store::end(&agent.db(), id, exit_code, stopped)?;
-                    let _ = write_frame(&mut w, &Response::Ok).await;
-                    break (state, exit_code);
-                }
-                Some(_) => {}
-                None => {
-                    store::mark_lost(&agent.db(), id)?;
-                    break (JobState::Lost, None);
-                }
-            },
-            Some(()) = stop_rx.recv() => {
-                tracing::info!(job = id, "stop requested");
-                let _ = write_frame(&mut w, &Response::StopJob).await;
-            }
-        }
+        log_path: log.to_string_lossy().into_owned(),
     };
-    agent.jobs.running().remove(&id);
+    // `Some((exit code, stopped))` as `pgpu run` reports it; `None` if it went away first,
+    // even before hearing back (it then runs the job unwatched).
+    let mut end = None;
+    if write_frame(&mut w, &started).await.is_ok() {
+        let mut from_wrapper = crate::ipc::forward_frames::<_, Request>(reader);
+        end = loop {
+            tokio::select! {
+                msg = from_wrapper.recv() => match msg {
+                    Some(Request::JobProcess { pgid }) => {
+                        if let Some(r) = agent.jobs.running().get_mut(&id) {
+                            r.pgid = Some(pgid);
+                        }
+                    }
+                    Some(Request::JobEnd { exit_code, stopped }) => break Some((exit_code, stopped)),
+                    Some(_) => {}
+                    None => break None,
+                },
+                Some(()) = stop_rx.recv() => {
+                    tracing::info!(job = id, "stop requested");
+                    let _ = write_frame(&mut w, &Response::StopJob).await;
+                }
+            }
+        };
+    }
+    let state = match end {
+        Some((exit_code, stopped)) => (store::end_state(exit_code, stopped), exit_code),
+        None => (JobState::Lost, None),
+    };
+    record_end(&agent, id, end, crate::store::db::now_ms());
+    if end.is_some() {
+        let _ = write_frame(&mut w, &Response::Ok).await;
+    }
+    drop(watching);
     tracing::info!(job = id, state = ?state.0, "job ended");
     // As set now: a phone may have turned the job's alerts off (or on) while it ran.
     let alerts_on = store::get(&agent.db(), id)
@@ -257,7 +318,8 @@ pub async fn lose_unclaimed(agent: Arc<Agent>, after: Duration) {
     );
     tokio::time::sleep(after).await;
     for id in waiting {
-        if !agent.jobs.is_running(id) && store::mark_lost(&agent.db(), id).is_ok() {
+        let now = crate::store::db::now_ms();
+        if !agent.jobs.is_running(id) && store::mark_lost(&agent.db(), id, now).is_ok() {
             tracing::warn!(
                 job = id,
                 "job didn't come back after the restart; marked lost"

@@ -29,10 +29,7 @@ pub async fn run(paths: Paths) -> Result<()> {
     // leave the running one unreachable: `pgpu status` would then say it isn't running. So
     // stop here, before this one's endpoint or alerts start.
     if crate::ipc::client::connect(&paths).await.is_ok() {
-        anyhow::bail!(
-            "PocketGPU is already running in the background for this user (see `pgpu status`), \
-             so there's no need to start it here"
-        );
+        anyhow::bail!(ALREADY_RUNNING);
     }
     // launchd holds the log open (append mode), so it is emptied in place when too big.
     #[cfg(target_os = "macos")]
@@ -46,6 +43,8 @@ pub async fn run(paths: Paths) -> Result<()> {
             });
     }
     let _ = paths.create_all();
+    // Two agents with one key and database fight over both, even when their sockets differ.
+    let _lock = hold_lock(&paths)?;
     crash::install_hook(&paths);
     #[cfg(windows)]
     let data_dir = paths.data_dir.clone();
@@ -57,6 +56,9 @@ pub async fn run(paths: Paths) -> Result<()> {
     if let Err(e) = crate::winsys::migrate_login_entry() {
         tracing::warn!("could not rename the login entry: {e:#}");
     }
+    // An update leaves the old agent's systemd unit, which kills phones' tmux and nohup jobs.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    tokio::task::spawn_blocking(crate::cli::service::upgrade_unit);
     // The last run's crash, if it crashed and crash reports are on (board 25).
     tokio::spawn({
         let agent = agent.clone();
@@ -149,8 +151,55 @@ async fn shutdown_signal() {
     }
 }
 
+const ALREADY_RUNNING: &str = "PocketGPU is already running in the background for this user \
+     (see `pgpu status`), so there's no need to start it here";
+
+/// The running agent's hold on [`Paths::lock_file`]; the system lets go when it exits, even
+/// by a crash. Where locks can't be taken at all (some network drives), the agent goes on.
+fn hold_lock(paths: &Paths) -> Result<Option<std::fs::File>> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = match options.open(paths.lock_file()) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!("could not open {}: {e}", paths.lock_file().display());
+            return Ok(None);
+        }
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(ALREADY_RUNNING),
+        Err(std::fs::TryLockError::Error(e)) => {
+            tracing::warn!("could not lock {}: {e}", paths.lock_file().display());
+            Ok(None)
+        }
+    }
+}
+
 /// Convenience for tests: an agent whose router serves on a local-only endpoint.
 pub async fn spawn_local(agent: Arc<Agent>) -> Result<iroh::protocol::Router> {
     let endpoint = endpoint::bind(&agent, Relays::LocalOnly).await?;
     Ok(endpoint::serve(agent, endpoint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_agent_for_the_same_data_does_not_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path().to_path_buf());
+        let first = hold_lock(&paths).unwrap();
+        assert!(first.is_some());
+        // Its socket elsewhere, the second agent still shares the data folder.
+        let mut second = paths.clone();
+        second.runtime_dir = dir.path().join("run");
+        let err = hold_lock(&second).unwrap_err();
+        assert!(err.to_string().contains("already running"), "{err:#}");
+        drop(first);
+        assert!(hold_lock(&second).unwrap().is_some());
+    }
 }

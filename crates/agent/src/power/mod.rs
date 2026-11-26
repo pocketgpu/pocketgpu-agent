@@ -9,6 +9,7 @@ pub mod os;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pocketgpu_proto::Permission;
 use pocketgpu_proto::msg::control::{PowerKind, PowerOutcome, PowerState};
 
 use crate::audit::{self, Event};
@@ -53,10 +54,36 @@ struct Pending {
     action: PowerKind,
     at_ms: i64,
     by: String,
+    /// The key of the device that asked: the countdown ends with its access.
+    device: String,
 }
 
 /// The audit result of a countdown starting; the notices read it (F35).
 pub const COUNTING_DOWN: &str = "in 30 s";
+
+/// The audit result of a countdown that ended because the device that asked was removed,
+/// its guest time ended or it lost Control.
+pub const ASKER_GONE: &str = "cancelled: the device that asked no longer has Control";
+
+/// How long after a restart or shut down started the agent looks again: still running then,
+/// the machine stayed on. A Mac asks apps to quit first, and one with unsaved work can stop
+/// it after the system's command already succeeded.
+#[cfg(not(test))]
+const STILL_UP: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const STILL_UP: Duration = Duration::from_secs(1);
+
+/// The outcome of a restart or shut down that started but left the machine on.
+pub const STILL_ON: &str = "still on 2 minutes later; an app may be asking to save its work";
+
+/// Whether the device that asked may still: paired, in its guest time, with Control.
+fn may_still(agent: &Agent, device: &str) -> bool {
+    device
+        .parse::<iroh::PublicKey>()
+        .ok()
+        .and_then(|k| agent.permission_of(&k))
+        .is_some_and(|p| p >= Permission::Control)
+}
 
 impl Power {
     pub fn pending(&self) -> Option<(PowerKind, i64)> {
@@ -68,8 +95,10 @@ impl Power {
         self.inner.lock().expect("power lock").last.clone()
     }
 
-    /// The countdown ended: runs the action unless it was cancelled meanwhile.
-    fn fire(&self, agent: &Agent, id: u64, run: Runner) {
+    /// The countdown ended: runs the action unless it was cancelled meanwhile, or the device
+    /// that asked may no longer (revoked, its guest time over, or less than Control now).
+    /// A restart or shut down that started gives its outcome's time, for `still_up`.
+    fn fire(&self, agent: &Agent, id: u64, run: Runner) -> Option<i64> {
         let pending = {
             let mut inner = self.inner.lock().expect("power lock");
             match &inner.pending {
@@ -77,8 +106,14 @@ impl Power {
                 _ => None,
             }
         };
-        let Some(p) = pending else { return };
-        let result = match run(p.action) {
+        let p = pending?;
+        if !may_still(agent, &p.device) {
+            self.cancelled(agent, p, ASKER_GONE);
+            return None;
+        }
+        let ran = run(p.action);
+        let goes_down = ran.is_ok() && matches!(p.action, PowerKind::Restart | PowerKind::ShutDown);
+        let result = match ran {
             Ok(()) => "started".to_string(),
             Err(e) => e,
         };
@@ -89,32 +124,71 @@ impl Power {
             p.action.as_str(),
             &result,
         );
+        let at_ms = now_ms();
         self.inner.lock().expect("power lock").last = Some(PowerOutcome {
             action: p.action,
             by: p.by,
-            at_ms: now_ms(),
+            at_ms,
             result,
         });
+        goes_down.then_some(at_ms)
+    }
+
+    /// Still running `STILL_UP` after the restart or shut down that started at `at_ms`: it
+    /// didn't happen, so phones see that instead of "started".
+    fn still_up(&self, agent: &Agent, at_ms: i64) {
+        let action = {
+            let mut inner = self.inner.lock().expect("power lock");
+            match inner.last.as_mut() {
+                Some(l) if l.at_ms == at_ms && l.result == "started" => {
+                    l.result = STILL_ON.into();
+                    l.action
+                }
+                _ => return,
+            }
+        };
+        let _ = audit::record(
+            &agent.db(),
+            "local",
+            Event::Power,
+            action.as_str(),
+            STILL_ON,
+        );
     }
 
     /// Cancels the countdown; `false` when nothing was pending.
     pub fn cancel(&self, agent: &Agent) -> bool {
         let p = self.inner.lock().expect("power lock").pending.take();
         let Some(p) = p else { return false };
-        let _ = audit::record(
-            &agent.db(),
-            "local",
-            Event::Power,
-            p.action.as_str(),
-            "cancelled",
-        );
+        self.cancelled(agent, p, "cancelled");
+        true
+    }
+
+    /// Cancels the countdown if `device` (a key) asked for it; called when that device is
+    /// removed, its guest time ends or it is set below Control. `false` when it had nothing
+    /// pending.
+    pub fn cancel_for(&self, agent: &Agent, device: &str) -> bool {
+        let p = {
+            let mut inner = self.inner.lock().expect("power lock");
+            match &inner.pending {
+                Some(p) if p.device == device => inner.pending.take(),
+                _ => None,
+            }
+        };
+        let Some(p) = p else { return false };
+        self.cancelled(agent, p, ASKER_GONE);
+        true
+    }
+
+    /// A countdown that won't run: audited with `why`; phones see it as cancelled.
+    fn cancelled(&self, agent: &Agent, p: Pending, why: &str) {
+        let _ = audit::record(&agent.db(), "local", Event::Power, p.action.as_str(), why);
         self.inner.lock().expect("power lock").last = Some(PowerOutcome {
             action: p.action,
             by: p.by,
             at_ms: now_ms(),
             result: "cancelled".into(),
         });
-        true
     }
 }
 
@@ -143,6 +217,7 @@ pub fn schedule(
             action,
             at_ms,
             by: by.into(),
+            device: device.into(),
         });
         (id, at_ms)
     };
@@ -156,7 +231,10 @@ pub fn schedule(
     let agent = agent.clone();
     tokio::spawn(async move {
         tokio::time::sleep(wait).await;
-        agent.power.fire(&agent, id, run);
+        if let Some(at_ms) = agent.power.fire(&agent, id, run) {
+            tokio::time::sleep(STILL_UP).await;
+            agent.power.still_up(&agent, at_ms);
+        }
     });
     Ok(at_ms)
 }

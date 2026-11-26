@@ -12,6 +12,9 @@ use crate::daemon::root;
 mod launchd;
 #[cfg(not(any(windows, target_os = "macos")))]
 mod systemd;
+// The watcher that starts the agent again on Windows; tested everywhere.
+#[cfg(any(windows, test))]
+mod watch;
 #[cfg(windows)]
 mod windows;
 
@@ -22,13 +25,13 @@ pub use launchd::{is_this_process, log_path, restart, state};
 #[cfg(not(any(windows, target_os = "macos")))]
 use systemd as platform;
 #[cfg(not(any(windows, target_os = "macos")))]
-pub use systemd::{UNIT, is_this_process, restart, state, unit_file};
+pub use systemd::{UNIT, is_this_process, restart, state, unit_file, upgrade_unit};
 #[cfg(windows)]
 use windows as platform;
 #[cfg(windows)]
 pub use windows::{
     is_this_process, restart, restart_after_stop, restart_detached, start as start_background,
-    start_when_stopped, state,
+    start_when_stopped, state, watch as watch_agent,
 };
 
 /// Whether a Windows login entry's command starts this agent: `"…\pocketgpu.exe" agent
@@ -69,6 +72,10 @@ pub enum Action {
 pub fn run(action: Action, json: bool) -> Result<()> {
     platform::check()?;
     root::check()?;
+    // On Linux, asked before stopping: whether tmux, nohup and Ollama from phones outlive it.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let left_running =
+        matches!(action, Action::Uninstall) && !json && systemd::leaves_phone_programs();
     let state = match action {
         Action::Install => platform::install(json)?,
         Action::Uninstall => platform::uninstall()?,
@@ -78,6 +85,10 @@ pub fn run(action: Action, json: bool) -> Result<()> {
         println!("{}", serde_json::json!({ "state": state }));
     } else if !matches!(action, Action::Install) {
         println!("Service {state}");
+        #[cfg(not(any(windows, target_os = "macos")))]
+        if left_running {
+            println!("{}", systemd::LEFT_RUNNING);
+        }
     }
     Ok(())
 }

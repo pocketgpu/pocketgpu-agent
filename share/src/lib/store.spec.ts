@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import {
 	context,
+	forgetLink,
 	getChats,
 	getLink,
 	lastLink,
@@ -24,6 +25,22 @@ describe('store', () => {
 		expect((await lastLink())?.id).toBe('l1');
 		expect((await getChats('l1')).chats[0].messages).toHaveLength(1);
 		expect((await getChats('nope')).chats).toEqual([]);
+	});
+	it('reopens the link opened last, not the one whose id sorts last', async () => {
+		// Ended link first, the new one after it; their ids sort the other way round.
+		await putLink({ id: 'lzz', fragment: 'OLD', key: [1], claimed: true, opened: 1_000 });
+		await putLink({ id: 'laa', fragment: 'NEW', key: [2], claimed: true, opened: 2_000 });
+		expect((await lastLink())?.id).toBe('laa');
+		// Opening the old one again makes it the last one.
+		await putLink({ id: 'lzz', fragment: 'OLD', key: [1], claimed: true, opened: 3_000 });
+		expect((await lastLink())?.id).toBe('lzz');
+	});
+	it('forgets a link that cannot be read', async () => {
+		await putLink({ id: 'lbad', fragment: 'BAD', key: [3], claimed: false, opened: 9_000 });
+		expect((await lastLink())?.id).toBe('lbad');
+		await forgetLink('lbad');
+		expect(await getLink('lbad')).toBeUndefined();
+		expect((await lastLink())?.id).toBe('lzz');
 	});
 });
 

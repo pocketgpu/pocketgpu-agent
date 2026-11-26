@@ -273,12 +273,13 @@ pub fn has_login_entry() -> bool {
     has_run_value(RUN_VALUE) || legacy_agent_entry()
 }
 
-/// Set in the agent `spawn_background` starts: the one the login entry runs, which can update
+/// Set in the agent `spawn_agent` starts: the one the login entry runs, which can update
 /// and restart itself (`cli::service::is_this_process`).
 pub const SERVICE_MARKER: &str = "PGPU_SERVICE";
 
-/// Starts `pocketgpu agent` with no console window, logging to `log`.
-pub fn spawn_background(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
+/// Starts `pocketgpu agent` with no console window, logging to `log`. The watcher
+/// (`pocketgpu watch-agent`) waits for it and starts it again if it fails.
+pub fn spawn_agent(exe: &std::path::Path, log: &std::path::Path) -> Result<std::process::Child> {
     let out = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -293,8 +294,7 @@ pub fn spawn_background(exe: &std::path::Path, log: &std::path::Path) -> Result<
         .stdout(out)
         .stderr(err)
         .spawn()
-        .context("could not start the agent")?;
-    Ok(())
+        .context("could not start the agent")
 }
 
 /// Starts `exe` with `args`, detached and with no window, its output dropped.

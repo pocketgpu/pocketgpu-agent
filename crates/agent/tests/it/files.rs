@@ -115,6 +115,17 @@ async fn guests_send_to_the_inbox_but_cannot_open_it() {
     let get = guest.download(Root::Inbox, "owner.pdf", &dest, |_, _| {});
     assert_eq!(code(get.await), ErrorCode::Forbidden);
     assert_eq!(guest.files_overview().await.unwrap().inbox_files, 0);
+    // Nor when the Inbox itself is shared: not even how many files it holds.
+    let path = s.dir.path().join("Inbox").to_str().unwrap().to_string();
+    let shared = local(&s.h, Request::ShareFolder { path }).await;
+    assert!(matches!(shared, Response::Files(f) if f.shared.len() == 2));
+    assert_eq!(guest.files_overview().await.unwrap().shared[1].files, 0);
+    assert_eq!(
+        code(guest.files_list(Root::Shared(1), "", 0).await),
+        ErrorCode::Forbidden
+    );
+    let (_o, owner) = phone(&s.h, Permission::Control).await;
+    assert_eq!(owner.files_overview().await.unwrap().shared[1].files, 1);
     let src = s.dir.path().join("a.txt");
     std::fs::write(&src, b"hello").unwrap();
     guest
@@ -123,6 +134,68 @@ async fn guests_send_to_the_inbox_but_cannot_open_it() {
         .unwrap();
     // The shared folders stay open to it.
     assert!(guest.files_list(Root::Shared(0), "", 0).await.is_ok());
+}
+
+/// `Downloads` shared, with the Inbox in `Downloads/PocketGPU/Inbox`: a guest still can't
+/// open the Inbox, by its path or through a link, and keeping the folder in sync leaves it out.
+#[tokio::test(flavor = "multi_thread")]
+async fn guests_cannot_open_the_inbox_inside_a_shared_folder() {
+    let s = setup().await;
+    let inbox = s.shared.join("PocketGPU").join("Inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::write(inbox.join("owner.pdf"), b"private").unwrap();
+    s.h.agent.config.write().unwrap().files_inbox = Some(inbox.clone());
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&inbox, s.shared.join("sent")).unwrap();
+    let (_o, owner) = phone(&s.h, Permission::Control).await;
+    let (g, guest) = phone(&s.h, Permission::Control).await;
+    let id = g.key.public().to_string();
+    let ends = pocketgpu::store::db::now_ms() + 3_600_000;
+    pocketgpu::store::devices::set_expiry(&s.h.agent.db(), &id, Some(ends)).unwrap();
+    let dest = s.dir.path().join("got.pdf");
+    for dir in ["PocketGPU/Inbox", "sent"] {
+        let refused = if dir == "sent" && cfg!(not(unix)) {
+            ErrorCode::NotFound
+        } else {
+            ErrorCode::Forbidden
+        };
+        let list = guest.files_list(Root::Shared(0), dir, 0).await;
+        assert_eq!(code(list), refused, "{dir}");
+        let file = format!("{dir}/owner.pdf");
+        let get = guest.download(Root::Shared(0), &file, &dest, |_, _| {});
+        assert_eq!(code(get.await), refused, "{file}");
+    }
+    // Another spelling (the same folder on macOS and Windows) is refused too.
+    assert!(
+        guest
+            .files_list(Root::Shared(0), "pocketgpu/inbox", 0)
+            .await
+            .is_err()
+    );
+    assert!(!dest.exists() || std::fs::read(&dest).unwrap().is_empty());
+    // Its name doesn't show either, so the folder still syncs, without the Inbox.
+    let (inside, _) = guest
+        .files_list(Root::Shared(0), "PocketGPU", 0)
+        .await
+        .unwrap();
+    assert!(inside.is_empty(), "{inside:?}");
+    let synced: Vec<_> = guest.sync_scan(Root::Shared(0)).await.unwrap();
+    assert!(synced.iter().any(|f| f.path == "new.png"));
+    assert!(
+        !synced.iter().any(|f| f.path.ends_with("owner.pdf")),
+        "{synced:?}"
+    );
+    // The owner's own devices open it as before.
+    owner
+        .download(
+            Root::Shared(0),
+            "PocketGPU/Inbox/owner.pdf",
+            &dest,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"private");
 }
 
 #[tokio::test(flavor = "multi_thread")]

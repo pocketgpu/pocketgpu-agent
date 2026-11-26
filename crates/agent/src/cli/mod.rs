@@ -209,6 +209,9 @@ pub enum Command {
     /// Windows, after an update from a phone: wait for the agent to stop, then start it.
     #[command(hide = true)]
     RestartAgent,
+    /// Windows: run the agent and start it again if it fails (what the login entry starts).
+    #[command(hide = true)]
+    WatchAgent,
     /// Start the agent at login: a systemd user service, a launchd agent on macOS, or a login entry on Windows.
     Service {
         #[command(subcommand)]
@@ -315,6 +318,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
             update::run(cli.json, *check, version.as_deref()).await
         }
         Command::RestartAgent => restart_agent(),
+        Command::WatchAgent => watch_agent(),
         Command::CrashReports { action } => crash::run(&paths, cli.json, *action).await,
     }
 }
@@ -362,6 +366,16 @@ fn restart_agent() -> anyhow::Result<()> {
     anyhow::bail!("restart-agent is for Windows; use pgpu service install")
 }
 
+#[cfg(windows)]
+fn watch_agent() -> anyhow::Result<()> {
+    service::watch_agent()
+}
+
+#[cfg(not(windows))]
+fn watch_agent() -> anyhow::Result<()> {
+    anyhow::bail!("watch-agent is for Windows; use pgpu service install")
+}
+
 #[cfg(not(windows))]
 fn background() -> anyhow::Result<()> {
     anyhow::bail!("--background is for Windows; on Linux and macOS, use `pgpu service install`")
@@ -372,11 +386,13 @@ fn background() -> anyhow::Result<()> {
 #[cfg(windows)]
 fn drop_admin(cli: &Cli) -> Option<ExitCode> {
     use crate::winsys::unelevated;
+    if unelevated::is_child() {
+        // Ctrl+C at the Administrator console still reaches this one.
+        unelevated::follow_parent();
+        return None;
+    }
     // A service account stays one with fewer rights; the root check then refuses it.
-    if unelevated::is_child()
-        || !crate::winsys::is_elevated()
-        || crate::winsys::is_service_account()
-    {
+    if !crate::winsys::is_elevated() || crate::winsys::is_service_account() {
         return None;
     }
     // Said once where it matters; `pgpu doctor` shows it too.

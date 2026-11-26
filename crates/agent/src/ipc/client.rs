@@ -21,12 +21,20 @@ pub type Stream = tokio::net::UnixStream;
 #[cfg(windows)]
 pub type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
 
+/// The first of [`Paths::sockets`] an agent answers on: one started from another kind of
+/// shell may listen elsewhere than this shell's own socket.
 #[cfg(unix)]
 pub async fn connect(paths: &Paths) -> Result<Stream> {
-    let path = paths.socket();
-    tokio::net::UnixStream::connect(&path)
-        .await
-        .with_context(not_running)
+    let mut first = None;
+    for path in paths.sockets() {
+        match tokio::net::UnixStream::connect(&path).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                first.get_or_insert(e);
+            }
+        }
+    }
+    Err(first.unwrap_or_else(|| std::io::ErrorKind::NotFound.into())).with_context(not_running)
 }
 
 /// A busy pipe means another client is connecting right now, not that the agent is gone.
@@ -58,4 +66,24 @@ pub fn pipe_name() -> String {
 fn not_running() -> String {
     "the PocketGPU agent is not running. Start it with `pgpu service install` or `pgpu agent`"
         .into()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// An agent started by hand in a shell with no `/run/user/<uid>` listens in its data
+    /// folder; the command line in another shell must still find it.
+    #[tokio::test]
+    async fn finds_an_agent_listening_in_the_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut paths = Paths::under(dir.path().join("data"));
+        paths.runtime_dir = dir.path().join("run");
+        std::fs::create_dir_all(&paths.data_dir).unwrap();
+        let _agent = tokio::net::UnixListener::bind(paths.data_dir.join("pocketgpu.sock")).unwrap();
+        assert!(connect(&paths).await.is_ok());
+        paths.data_dir = dir.path().join("elsewhere");
+        let err = connect(&paths).await.unwrap_err();
+        assert!(err.to_string().contains("not running"), "{err:#}");
+    }
 }

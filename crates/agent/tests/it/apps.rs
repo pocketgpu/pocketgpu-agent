@@ -6,7 +6,7 @@ use crate::harness;
 
 use harness::Harness;
 use pocketgpu::apps::local_request;
-use pocketgpu_client::{ClientError, Machine};
+use pocketgpu_client::{ClientError, Machine, Reach};
 use pocketgpu_proto::local::{Request as Local, Response as Reply};
 use pocketgpu_proto::{ErrorCode, Permission};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -95,7 +95,7 @@ async fn off_until_turned_on_and_only_full_control_opens() {
     // Off: nothing is listed, and opening says how to turn it on.
     let list = view.apps().await.unwrap();
     assert!(!list.enabled && list.apps.is_empty());
-    let (code, message) = refusal(shell.forward_app(port, Some(0)).await);
+    let (code, message) = refusal(shell.forward_app(port, Some(0), Reach::Viewer).await);
     assert_eq!(code, ErrorCode::Forbidden);
     assert!(message.contains("pgpu apps on"), "{message}");
 
@@ -104,18 +104,18 @@ async fn off_until_turned_on_and_only_full_control_opens() {
     let app = list.apps.iter().find(|a| a.port == port).expect("found");
     assert_eq!(app.name, "Gradio app");
     assert_eq!(
-        refusal(view.forward_app(port, Some(0)).await).0,
+        refusal(view.forward_app(port, Some(0), Reach::Viewer).await).0,
         ErrorCode::Forbidden
     );
     assert_eq!(
-        refusal(control.forward_app(port, Some(0)).await).0,
+        refusal(control.forward_app(port, Some(0), Reach::Viewer).await).0,
         ErrorCode::Forbidden
     );
 
     // A port nobody added is refused, even with Full control.
     let (code, _) = refusal(
         shell
-            .forward_app(port.wrapping_add(1).max(1), Some(0))
+            .forward_app(port.wrapping_add(1).max(1), Some(0), Reach::Viewer)
             .await,
     );
     assert_eq!(code, ErrorCode::Forbidden);
@@ -124,7 +124,7 @@ async fn off_until_turned_on_and_only_full_control_opens() {
     let reply = local_request(&h.agent, Local::SetAppOff { port, off: true }).await;
     assert!(matches!(&reply, Reply::Apps(a) if a.apps.iter().any(|x| x.port == port && x.off)));
     assert_eq!(
-        refusal(shell.forward_app(port, Some(0)).await).0,
+        refusal(shell.forward_app(port, Some(0), Reach::Viewer).await).0,
         ErrorCode::Forbidden
     );
 }
@@ -137,7 +137,10 @@ async fn a_browser_reaches_the_app_through_the_local_address() {
     turn(&h, true).await;
     let shell = device(&h, Permission::Shell).await;
 
-    let fwd = shell.forward_app(port, Some(0)).await.unwrap();
+    let fwd = shell
+        .forward_app(port, Some(0), Reach::Anyone)
+        .await
+        .unwrap();
     assert!(fwd.local.ip().is_loopback());
     for path in ["/", "/lab", "/api/kernels"] {
         let page = get(fwd.local, path).await;
@@ -162,6 +165,61 @@ async fn a_browser_reaches_the_app_through_the_local_address() {
     drop(fwd);
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(TcpStream::connect(local).await.is_err());
+}
+
+/// A request for `path` with these extra header lines, as the phone's viewer sends it.
+async fn send(addr: std::net::SocketAddr, path: &str, extra: &str) -> String {
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    let port = addr.port();
+    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n{extra}\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn on_a_phone_only_the_viewer_gets_in() {
+    let h = Harness::start().await;
+    let port = web_app().await;
+    add(&h, port).await;
+    turn(&h, true).await;
+    let shell = device(&h, Permission::Shell).await;
+    let fwd = shell
+        .forward_app(port, Some(0), Reach::Viewer)
+        .await
+        .unwrap();
+
+    // Another app on the phone that finds the port gets nothing from the machine.
+    for path in ["/", "/prompt"] {
+        let page = get(fwd.local, path).await;
+        assert!(page.starts_with("HTTP/1.1 403"), "{page}");
+        assert!(!page.contains("Gradio"), "{page}");
+    }
+
+    // The viewer opens the address it was given: a cookie, and on to where it starts.
+    let url = fwd.url("/?token=f00d");
+    let entry = url.strip_prefix(&format!("http://{}", fwd.local)).unwrap();
+    assert!(entry.starts_with("/__pgpu/"), "{url}");
+    let answer = send(fwd.local, entry, "").await;
+    assert!(answer.starts_with("HTTP/1.1 303"), "{answer}");
+    assert!(answer.contains("location: /?token=f00d\r\n"), "{answer}");
+    let cookie = answer
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("a cookie");
+    assert!(
+        cookie.starts_with(&format!("pgpu_fwd_{}=", fwd.local.port())),
+        "{cookie}"
+    );
+
+    // With it, pages and a WebSocket's upgrade reach the app.
+    let page = send(fwd.local, "/?token=f00d", &format!("Cookie: {cookie}\r\n")).await;
+    assert!(page.ends_with("/?token=f00d"), "{page}");
+    let ws = format!("Cookie: {cookie}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n");
+    let page = send(fwd.local, "/api/kernels/1/channels", &ws).await;
+    assert!(page.ends_with("/api/kernels/1/channels"), "{page}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -221,7 +279,7 @@ async fn an_open_connection_ends_when_full_control_is_taken_away() {
     turn(&h, true).await;
     let phone = h.phone(Some(Permission::Shell)).await;
     let m = h.connect(&phone).await.unwrap();
-    let fwd = m.forward_app(port, Some(0)).await.unwrap();
+    let fwd = m.forward_app(port, Some(0), Reach::Anyone).await.unwrap();
 
     let mut s = TcpStream::connect(fwd.local).await.unwrap();
     let head = format!(
@@ -244,4 +302,36 @@ async fn an_open_connection_ends_when_full_control_is_taken_away() {
     let ended =
         tokio::time::timeout(std::time::Duration::from_secs(5), s.read_to_end(&mut rest)).await;
     assert!(ended.is_ok(), "the connection stayed open");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_on_the_machine_never_sees_a_key() {
+    let h = Harness::start().await;
+    let port = echo_app().await;
+    add(&h, port).await;
+    turn(&h, true).await;
+    let shell = device(&h, Permission::Shell).await;
+    let fwd = shell
+        .forward_app(port, Some(0), Reach::Viewer)
+        .await
+        .unwrap();
+    let url = fwd.url("/");
+    let entry = url.strip_prefix(&format!("http://{}", fwd.local)).unwrap();
+    let answer = send(fwd.local, entry, "").await;
+    let cookie = answer
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("a cookie");
+
+    // The viewer sends every forward's cookie to each (cookies don't tell ports apart);
+    // the app gets its own cookies only.
+    let mut s = TcpStream::connect(fwd.local).await.unwrap();
+    let host = format!("Host: 127.0.0.1:{}\r\n", fwd.local.port());
+    let sent = format!("GET / HTTP/1.1\r\n{host}Cookie: _xsrf=1; {cookie}; pgpu_fwd_9=old\r\n\r\n");
+    s.write_all(sent.as_bytes()).await.unwrap();
+    let want = format!("GET / HTTP/1.1\r\n{host}Cookie: _xsrf=1\r\n\r\n");
+    let mut got = vec![0u8; want.len()];
+    s.read_exact(&mut got).await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&got), want);
 }

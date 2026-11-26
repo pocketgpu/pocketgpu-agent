@@ -96,6 +96,10 @@ pub fn set_permission(
         &d.name,
         &result,
     );
+    if permission < Permission::Control {
+        // A restart, sleep or shut down it asked for doesn't happen.
+        agent.power.cancel_for(agent, &d.device_id);
+    }
     // Requests are checked against the stored permission, so open connections pick the
     // change up on their next request.
     let fresh = devices::get(&agent.db(), &d.device_id)
@@ -115,6 +119,8 @@ pub fn revoke(agent: &Agent, query: &str) -> Result<DeviceInfo, String> {
         agent.drop_connections(&k);
     }
     let _ = audit::record(&agent.db(), "local", Event::Revoke, &d.name, "revoked");
+    // A restart, sleep or shut down it asked for doesn't happen.
+    agent.power.cancel_for(agent, &d.device_id);
     Ok(before)
 }
 
@@ -192,6 +198,7 @@ pub fn revoke_by(agent: &Agent, caller: &PublicKey, device: &str) -> Result<Stri
         &d.name,
         crate::notices::REVOKED_BY_DEVICE,
     );
+    agent.power.cancel_for(agent, &d.device_id);
     Ok(d.device_id)
 }
 
@@ -209,6 +216,7 @@ pub fn unpair(agent: &std::sync::Arc<Agent>, key: PublicKey) -> anyhow::Result<b
             name.as_deref().unwrap_or("phone"),
             "unpaired itself",
         );
+        agent.power.cancel_for(agent, &id);
         let agent = agent.clone();
         tokio::spawn(async move {
             tokio::time::sleep(UNPAIR_CLOSE_AFTER).await;

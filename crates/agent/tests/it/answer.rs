@@ -16,6 +16,11 @@ const PIECES: usize = 5;
 
 /// An Ollama that writes `/api/chat` and `/api/pull` a line every 100 ms.
 async fn slow_ollama() -> String {
+    ollama_after(Duration::ZERO).await
+}
+
+/// The same, answering only after `load`, as while it loads a model.
+async fn ollama_after(load: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -27,6 +32,7 @@ async fn slow_ollama() -> String {
                 let mut buf = vec![0u8; 8192];
                 let n = s.read(&mut buf).await.unwrap_or(0);
                 let pull = String::from_utf8_lossy(&buf[..n]).starts_with("POST /api/pull");
+                tokio::time::sleep(load).await;
                 let head = "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\nconnection: close\r\n\r\n";
                 let _ = s.write_all(head.as_bytes()).await;
                 for i in 1..=PIECES {
@@ -113,6 +119,46 @@ async fn an_answer_finishes_while_the_phone_is_away() {
         m.answer(AnswerAction::Resume { id: 7, from: 0 }).await,
         Err(ClientError::Remote(_))
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answer_is_kept_while_the_model_loads() {
+    let h = Harness::start().await;
+    h.agent.config.write().unwrap().ollama_addr = ollama_after(Duration::from_millis(600)).await;
+    let phone = h.phone(Some(Permission::Control)).await;
+    let m = h.connect(&phone).await.unwrap();
+    let body = br#"{"model":"qwen3:30b","messages":[],"stream":true}"#.to_vec();
+    let start = |id| AnswerAction::Start {
+        id,
+        port: None,
+        body: body.clone(),
+    };
+
+    // The phone goes away before the model has loaded, so before the answer began.
+    let gone = tokio::time::timeout(Duration::from_millis(200), m.answer(start(3))).await;
+    assert!(gone.is_err(), "it answered before the model loaded");
+
+    // Back, it picks the answer up from its start: it waits for the model as the first did.
+    let whole = read_all(
+        m.answer(AnswerAction::Resume { id: 3, from: 0 })
+            .await
+            .unwrap(),
+    )
+    .await;
+    for i in 1..=PIECES {
+        assert!(whole.contains(&format!("w{i} ")), "{whole}");
+    }
+
+    // Stopped while the model loads, whoever waits for it hears so.
+    let (m2, four) = (m.clone(), start(4));
+    let waiting = tokio::spawn(async move { m2.answer(four).await.map(|_| ()) });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    read_all(m.answer(AnswerAction::Stop { id: 4 }).await.unwrap()).await;
+    let heard = tokio::time::timeout(Duration::from_secs(2), waiting).await;
+    assert!(
+        matches!(heard, Ok(Ok(Err(ClientError::Remote(_))))),
+        "{heard:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -23,8 +23,9 @@ dunce = "1"
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 mdns-sd.workspace = true
 
-# Quarantine marks on what comes from another computer (`mark.rs`).
-[target.'cfg(target_os = "macos")'.dependencies]
+# Quarantine marks on what comes from another computer (`mark.rs`); on Linux, the user's
+# `/run/user/<uid>` for the agent's socket (`local`).
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

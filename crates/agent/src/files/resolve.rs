@@ -54,8 +54,45 @@ pub struct Rules {
     /// Links may lead out of the root (only for "All your files", which is everything
     /// the agent's user can read); paths still start at the root.
     pub outside: bool,
-    /// Folders that stay closed (PocketGPU's own keys), canonical.
+    /// Folders that stay closed (PocketGPU's own keys; a guest's Inbox), canonical.
     pub deny: Vec<PathBuf>,
+    /// Folders that stay closed whatever path leads there (a guest's Inbox spelt in other
+    /// capitals on a disk that ignores them, or through a bind mount).
+    pub deny_ids: Vec<FileId>,
+}
+
+/// Which folder or file a path is on disk, however it is spelt: its device and inode. Only
+/// on Unix; Windows resolves a path to its spelling on disk, so there the path tells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
+pub struct FileId(u64, u64);
+
+impl FileId {
+    pub fn of(meta: &Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some(Self(meta.dev(), meta.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            None
+        }
+    }
+}
+
+/// Whether a canonical path is in a closed folder: by its path, or by which folder it or
+/// one above it is on disk. A folder above it that can't be looked at counts as closed.
+pub fn denied(canon: &Path, paths: &[PathBuf], ids: &[FileId]) -> bool {
+    if paths.iter().any(|d| canon.starts_with(d)) {
+        return true;
+    }
+    !ids.is_empty()
+        && canon.ancestors().any(|a| match std::fs::metadata(a) {
+            Ok(meta) => FileId::of(&meta).is_some_and(|id| ids.contains(&id)),
+            Err(_) => true,
+        })
 }
 
 impl Rules {
@@ -65,6 +102,7 @@ impl Rules {
             hidden: false,
             outside: false,
             deny: Vec::new(),
+            deny_ids: Vec::new(),
         })
     }
 
@@ -85,7 +123,7 @@ impl Rules {
     /// Whether a canonical path is inside the root (or anywhere, when links may lead
     /// out), not hidden when hidden names are refused, and not in a denied folder.
     pub fn check(&self, canon: &Path) -> Result<(), Refused> {
-        if self.deny.iter().any(|d| canon.starts_with(d)) {
+        if denied(canon, &self.deny, &self.deny_ids) {
             return Err(Refused::Outside);
         }
         let below = match canon.strip_prefix(&self.root) {
