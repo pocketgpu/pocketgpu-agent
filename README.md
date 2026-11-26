@@ -9,9 +9,11 @@ falling back to an encrypted relay. It never runs as root, only paired devices m
 every request is checked against that device's permission. Your stats, logs, terminal traffic
 and chats stay on your machines; the push server only relays short alert text.
 
-The PocketGPU phone app (iPhone and Android) is in private beta: join at
-[pocketgpu.app](https://pocketgpu.app/#beta) and your invite has the link. Without it, the
-agent can still send alerts to ntfy, Telegram or Discord (`pgpu notify`).
+The PocketGPU phone app for Android is in a closed test on Google Play: join
+https://groups.google.com/g/pocketgpu-testers with the Google account on your phone, then opt in
+at https://play.google.com/apps/testing/app.pocketgpu. The iPhone app is in private beta: join
+at [pocketgpu.app](https://pocketgpu.app/#beta). Without the app, the agent can still send
+alerts to ntfy, Telegram or Discord (`pgpu notify`).
 
 ## Install
 
