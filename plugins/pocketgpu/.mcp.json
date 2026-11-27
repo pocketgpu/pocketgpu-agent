@@ -2,7 +2,7 @@
   "mcpServers": {
     "pocketgpu": {
       "command": "pgpu",
-      "args": ["mcp"]
+      "args": ["mcp", "--assistant", "claude"]
     }
   }
 }
