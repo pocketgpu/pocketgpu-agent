@@ -185,8 +185,9 @@ fn senders(agent: &Agent) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// `pgpu send`: offers a file for 7 days to devices with Control, or to the one named.
-/// Refused while files are off, as no device could save it.
+/// `pgpu send`: offers a file for 7 days to the owner's devices with Control, or to the one
+/// named. Refused while files are off, as no device could save it; never to a guest (F44),
+/// and never a key or secret (an AI assistant here can run `pgpu send` too).
 fn offer(agent: &Arc<Agent>, path: &Path, to: Option<&str>) -> Result<Response, String> {
     if !agent.config.read().expect("config lock poisoned").files {
         return Err(
@@ -195,9 +196,16 @@ fn offer(agent: &Arc<Agent>, path: &Path, to: Option<&str>) -> Result<Response, 
                 .into(),
         );
     }
+    let homes = super::secrets::homes();
+    if super::secrets::any_secret(&[path], &homes) {
+        return Err(super::secrets::refusal(&path.display().to_string()));
+    }
     let canon = path
         .canonicalize()
         .map_err(|_| format!("{} doesn't exist or can't be opened", path.display()))?;
+    if super::secrets::any_secret(&[&canon], &homes) {
+        return Err(super::secrets::refusal(&path.display().to_string()));
+    }
     let meta = std::fs::metadata(&canon).map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err(format!(
@@ -220,6 +228,12 @@ fn offer(agent: &Arc<Agent>, path: &Path, to: Option<&str>) -> Result<Response, 
     let targets: Vec<_> = match to {
         Some(query) => {
             let d = crate::daemon::devices::find(agent, query)?;
+            if d.expires_ms.is_some() {
+                return Err(format!(
+                    "{} is a guest; PocketGPU offers files only to your own devices",
+                    d.name
+                ));
+            }
             if !can_save(&d.permission) {
                 return Err(format!(
                     "{} can only view this machine; let it save files first with: \
@@ -231,7 +245,7 @@ fn offer(agent: &Arc<Agent>, path: &Path, to: Option<&str>) -> Result<Response, 
         }
         None => devices
             .into_iter()
-            .filter(|d| can_save(&d.permission) && !d.this_pc)
+            .filter(|d| can_save(&d.permission) && !d.this_pc && d.expires_ms.is_none())
             .collect(),
     };
     let name = clean_name(&canon.file_name().unwrap_or_default().to_string_lossy());

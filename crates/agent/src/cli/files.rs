@@ -93,7 +93,7 @@ pub fn absolute(path: &Path) -> Result<String> {
     text(&full)
 }
 
-fn text(path: &Path) -> Result<String> {
+pub(super) fn text(path: &Path) -> Result<String> {
     match path.to_str() {
         Some(s) => Ok(s.to_string()),
         None => bail!(

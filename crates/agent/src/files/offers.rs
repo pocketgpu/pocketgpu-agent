@@ -1,8 +1,8 @@
 //! Files offered with `pgpu send` (F40 user story 3): kept for 7 days in the `offers`
-//! table, for every device with Control or only the one named. A guest (F44) sees offers to
-//! everyone only from when it joined. A device saves one by its id; the file must still have
-//! the size and time it had when it was offered. The devices get a push that names this
-//! machine, never the file.
+//! table, for every owner's device with Control or only the one named. A guest (F44) sees
+//! none: offers are for the owner's own devices (F32 safety). A device saves one by its id;
+//! the file must still have the size and time it had when it was offered. The devices get a
+//! push that names this machine, never the file.
 
 use std::path::{Path, PathBuf};
 
@@ -102,10 +102,10 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
     })
 }
 
-/// Which offers device `?2` may save: those named for it, and those to everyone; for a guest
-/// (a device with an end time) only those made since it joined.
-const FOR: &str = "(to_device = ?2 OR (to_device IS NULL AND created_ms >= coalesce(
-        (SELECT paired_at FROM devices WHERE device_id = ?2 AND expires_ms IS NOT NULL), 0)))";
+/// Which offers device `?2` may save: those named for it, and those to everyone; none for a
+/// guest (a device with an end time), even one named before it became a guest.
+const FOR: &str = "((to_device = ?2 OR to_device IS NULL) AND NOT EXISTS (
+        SELECT 1 FROM devices WHERE device_id = ?2 AND expires_ms IS NOT NULL))";
 
 /// Offers a device may save now, newest first.
 pub fn for_device(db: &Connection, device: &str, now: i64) -> Result<Vec<Stored>> {
@@ -174,7 +174,7 @@ pub fn push_text(machine: &str) -> (String, String) {
 }
 
 /// Sends the push in the background: `pgpu send` doesn't wait for the push server. Free on
-/// every plan, like a note (`AlertKind::JobEnd`).
+/// every plan, like a job alert (`AlertKind::JobEnd`).
 pub fn push(agent: &std::sync::Arc<Agent>, tickets: Vec<String>) {
     if tickets.is_empty() {
         return;
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn guests_only_see_offers_to_everyone_made_since_they_joined() {
+    fn guests_see_no_offers() {
         let db = open_in_memory().unwrap();
         let add = |id: &str, paired: i64, ends: Option<i64>| {
             devices::upsert(&db, id, id, Platform::Android, Permission::Control, None).unwrap();
@@ -281,11 +281,14 @@ mod tests {
                 .collect()
         };
         assert_eq!(ids("owner"), vec![after.clone(), before.clone()]);
-        assert_eq!(ids("guest"), vec![after.clone(), named.clone()]);
-        assert!(find(&db, &before, "guest", 4000).unwrap().is_none());
-        assert!(find(&db, &after, "guest", 4000).unwrap().is_some());
-        assert!(find(&db, &named, "guest", 4000).unwrap().is_some());
+        assert!(ids("guest").is_empty());
+        for id in [&before, &after, &named] {
+            assert!(find(&db, id, "guest", 4000).unwrap().is_none());
+        }
         assert!(find(&db, &before, "owner", 4000).unwrap().is_some());
+        // Once paired for good, the device sees them again.
+        devices::set_expiry(&db, "guest", None).unwrap();
+        assert_eq!(ids("guest"), vec![after, named, before]);
     }
 
     #[test]

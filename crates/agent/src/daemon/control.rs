@@ -82,8 +82,12 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
         }
     }
     match req {
-        Request::Hello { .. } => Response::MachineInfo(machine_info(agent, peer)),
-        Request::Status { .. } => {
+        Request::Hello { proto, .. } => {
+            agent.note_app_proto(&peer.key, proto);
+            Response::MachineInfo(machine_info(agent, peer))
+        }
+        Request::Status { proto, .. } => {
+            agent.note_app_proto(&peer.key, proto);
             let running = crate::jobs::store::list(&agent.db(), 10, None)
                 .ok()
                 .and_then(|jobs| jobs.into_iter().find(|j| j.state == JobState::Running));
@@ -94,7 +98,10 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                 games: crate::games::running(agent).await,
             }))
         }
-        Request::GetAlertSettings => Response::AlertSettings(crate::alerts::settings::get(agent)),
+        Request::GetAlertSettings => Response::AlertSettings(crate::alerts::settings::for_phone(
+            crate::alerts::settings::get(agent),
+            agent.app_proto(&peer.key),
+        )),
         Request::GetIdleAlert => {
             let cfg = agent.config.read().expect("config lock poisoned");
             Response::IdleAlert(crate::alerts::settings::idle(&cfg.alerts))
@@ -121,7 +128,10 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
                     "alerts",
                     "ok",
                 );
-                Response::AlertSettings(rules)
+                Response::AlertSettings(crate::alerts::settings::for_phone(
+                    rules,
+                    agent.app_proto(&peer.key),
+                ))
             }
             Err(e) => Response::Error(Error::new(ErrorCode::Invalid, e.to_string())),
         },

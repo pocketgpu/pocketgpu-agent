@@ -61,6 +61,11 @@ pub fn rules(cfg: &AlertConfig) -> Vec<AlertRule> {
             threshold: None,
         },
         AlertRule {
+            kind: AlertKind::Assistant,
+            enabled: cfg.assistant,
+            threshold: None,
+        },
+        AlertRule {
             kind: AlertKind::GpuTemp,
             enabled: cfg.gpu_temp_c.is_some(),
             threshold: Some(cfg.gpu_temp_c.unwrap_or(DEFAULT_GPU_TEMP_C)),
@@ -134,6 +139,7 @@ pub fn apply(cfg: &AlertConfig, changes: &[AlertRule]) -> Result<AlertConfig> {
             }
             AlertKind::OllamaDown => next.ollama_down = r.enabled,
             AlertKind::GenericText => next.generic_text = r.enabled,
+            AlertKind::Assistant => next.assistant = r.enabled,
             AlertKind::Unknown => bail!("unknown alert type"),
         }
     }
@@ -154,6 +160,22 @@ pub fn set(agent: &Agent, changes: &[AlertRule]) -> Result<Vec<AlertRule>> {
 pub fn get(agent: &Agent) -> Vec<AlertRule> {
     rules(&agent.config.read().expect("config lock poisoned").alerts)
 }
+
+/// The rules as a phone gets them. A phone app from before AI assistant alerts can't read
+/// that kind and would lose the whole list, so it gets the list without it; only an app
+/// that said it speaks `ASSISTANT_PROTO` or later (in `Hello` or `Status`) sees the rule.
+pub fn for_phone(rules: Vec<AlertRule>, proto: Option<u16>) -> Vec<AlertRule> {
+    if proto.is_some_and(|p| p >= ASSISTANT_PROTO) {
+        return rules;
+    }
+    rules
+        .into_iter()
+        .filter(|r| r.kind != AlertKind::Assistant)
+        .collect()
+}
+
+/// The first proto version whose apps read `AlertKind::Assistant`.
+pub const ASSISTANT_PROTO: u16 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -285,6 +307,51 @@ mod tests {
         // Turning offline back on without a value restores the default.
         let back = apply(&next, &[rule(AlertKind::Offline, true, None)]).unwrap();
         assert_eq!(back.offline_after_min, 5.0);
+    }
+
+    #[test]
+    fn assistant_alerts_are_on_by_default_and_switch_alone() {
+        let cfg = AlertConfig::default();
+        let r = rules(&cfg);
+        assert_eq!(r[0].kind, AlertKind::JobEnd);
+        // Right under job alerts, like the row on the phone.
+        assert_eq!(r[1].kind, AlertKind::Assistant);
+        assert!(r[1].enabled && r[1].threshold.is_none());
+        let off = apply(&cfg, &[rule(AlertKind::Assistant, false, None)]).unwrap();
+        assert!(!off.assistant);
+        // Job alerts keep coming.
+        assert_eq!(
+            AlertConfig {
+                assistant: true,
+                ..off.clone()
+            },
+            cfg
+        );
+        let on = apply(&off, &[rule(AlertKind::Assistant, true, None)]).unwrap();
+        assert!(on.assistant);
+    }
+
+    #[test]
+    fn older_phones_get_the_list_without_the_assistant_rule() {
+        let all = rules(&AlertConfig::default());
+        let has = |list: &[AlertRule]| list.iter().any(|r| r.kind == AlertKind::Assistant);
+        for proto in [None, Some(0), Some(1)] {
+            let list = for_phone(all.clone(), proto);
+            assert!(!has(&list), "{proto:?}");
+            assert_eq!(list.len(), all.len() - 1);
+        }
+        assert_eq!(for_phone(all.clone(), Some(ASSISTANT_PROTO)), all);
+        assert_eq!(for_phone(all.clone(), Some(ASSISTANT_PROTO + 1)), all);
+    }
+
+    #[test]
+    fn this_app_build_gets_the_assistant_rule() {
+        // The phone app sends `PROTO_VERSION`; if it fell behind the gate, the app would
+        // never see the AI assistants switch.
+        const { assert!(pocketgpu_proto::msg::PROTO_VERSION >= ASSISTANT_PROTO) };
+        let all = rules(&AlertConfig::default());
+        let list = for_phone(all.clone(), Some(pocketgpu_proto::msg::PROTO_VERSION));
+        assert_eq!(list, all);
     }
 
     #[test]

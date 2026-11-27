@@ -34,6 +34,11 @@ impl PeerProtocol for Events {
                         Err(RecvError::Lagged(_)) => continue,
                         Err(RecvError::Closed) => return,
                     };
+                    // AI assistant notes and alerts are for the owner's devices only.
+                    if crate::alerts::assistant::owner_only(&alert.kind) && is_guest(&agent, &peer)
+                    {
+                        continue;
+                    }
                     if write_frame(&mut send, &alert).await.is_err() {
                         return;
                     }
@@ -41,4 +46,10 @@ impl PeerProtocol for Events {
             }));
         }
     }
+}
+
+/// Checked per alert, not once: a guest's access can change while its app stays open.
+fn is_guest(agent: &Agent, peer: &Peer) -> bool {
+    // A database error counts as a guest: an owner-only alert is better missed than leaked.
+    crate::store::devices::is_guest(&agent.db(), &peer.key.to_string()).unwrap_or(true)
 }

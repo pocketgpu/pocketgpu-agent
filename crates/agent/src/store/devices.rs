@@ -119,6 +119,21 @@ pub fn push_tickets(db: &Connection) -> Result<Vec<String>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Push tickets of the owner's devices only: those paired for good, never a guest (F44, a
+/// device with an end time). AI assistant notes and alerts go here (F32).
+pub fn owner_push_tickets(db: &Connection) -> Result<Vec<String>> {
+    let mut stmt = db.prepare(
+        "SELECT push_ticket FROM devices WHERE push_ticket IS NOT NULL AND expires_ms IS NULL",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Whether this device is a guest (F44): paired only until an end time.
+pub fn is_guest(db: &Connection, device_id: &str) -> Result<bool> {
+    Ok(get(db, device_id)?.is_some_and(|d| d.expires_ms.is_some()))
+}
+
 /// The phone's push ticket from the push server; replaces the old one.
 pub fn set_push_ticket(db: &Connection, device_id: &str, ticket: &str) -> Result<bool> {
     Ok(db.execute(
@@ -129,4 +144,32 @@ pub fn set_push_ticket(db: &Connection, device_id: &str, ticket: &str) -> Result
 
 pub fn get(db: &Connection, device_id: &str) -> Result<Option<Device>> {
     Ok(list(db)?.into_iter().find(|d| d.device_id == device_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::db::open_in_memory;
+
+    #[test]
+    fn owner_tickets_leave_out_guests() {
+        let db = open_in_memory().unwrap();
+        let add = |id: &str, ticket: Option<&str>| {
+            upsert(&db, id, id, Platform::Android, Permission::Control, ticket).unwrap()
+        };
+        add("owner", Some("t-owner"));
+        add("guest", Some("t-guest"));
+        add("quiet", None);
+        set_expiry(&db, "guest", Some(i64::MAX / 2)).unwrap();
+        assert_eq!(
+            owner_push_tickets(&db).unwrap(),
+            vec!["t-owner".to_string()]
+        );
+        let mut all = push_tickets(&db).unwrap();
+        all.sort();
+        assert_eq!(all, vec!["t-guest".to_string(), "t-owner".to_string()]);
+        assert!(is_guest(&db, "guest").unwrap());
+        assert!(!is_guest(&db, "owner").unwrap());
+        assert!(!is_guest(&db, "nobody").unwrap());
+    }
 }

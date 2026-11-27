@@ -13,6 +13,7 @@ pub mod offers;
 mod place;
 pub mod resolve;
 pub mod room;
+pub mod secrets;
 mod still;
 
 use std::path::{Path, PathBuf};

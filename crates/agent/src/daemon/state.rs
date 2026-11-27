@@ -52,6 +52,11 @@ pub struct Agent {
     pub power: crate::power::Power,
     /// Fired alerts, for apps subscribed over `pgpu/events/1`.
     pub events: tokio::sync::broadcast::Sender<pocketgpu_proto::msg::events::Alert>,
+    /// AI assistants' sessions on this computer (F32), in memory.
+    pub assistants: crate::assistants::Assistants,
+    /// The proto version each phone app last said it speaks (`Hello`, `Status`), in memory:
+    /// older apps can't read every alert kind (`alerts::settings::for_phone`).
+    app_protos: Mutex<HashMap<PublicKey, u16>>,
     /// Open connections per phone, so revoking can drop them at once.
     connections: Mutex<HashMap<PublicKey, Vec<Connection>>>,
 }
@@ -113,8 +118,27 @@ impl Agent {
             alerts_paused_until: std::sync::atomic::AtomicI64::new(0),
             power: Default::default(),
             events: tokio::sync::broadcast::channel(32).0,
+            assistants: Default::default(),
+            app_protos: Mutex::new(HashMap::new()),
             connections: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Remembers the proto version a phone's app sent in `Hello` or `Status`.
+    pub fn note_app_proto(&self, device: &PublicKey, proto: u16) {
+        self.app_protos
+            .lock()
+            .expect("proto lock poisoned")
+            .insert(*device, proto);
+    }
+
+    /// The proto version this phone's app last sent, if it sent one since the agent started.
+    pub fn app_proto(&self, device: &PublicKey) -> Option<u16> {
+        self.app_protos
+            .lock()
+            .expect("proto lock poisoned")
+            .get(device)
+            .copied()
     }
 
     pub fn name(&self) -> String {

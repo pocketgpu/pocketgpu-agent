@@ -1,0 +1,10 @@
+{
+  "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a53",
+  "transcript_path": "/Users/ana/.codex/sessions/2026/11/26/rollout.jsonl",
+  "cwd": "/Users/ana/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5-codex",
+  "turn_id": "turn-7",
+  "permission_mode": "default",
+  "prompt": "Train the model overnight"
+}

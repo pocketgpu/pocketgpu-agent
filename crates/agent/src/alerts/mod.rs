@@ -1,6 +1,7 @@
 //! Alerts to paired phones through the push server (F08). Rule alerts (GPU temperature,
 //! disk, Ollama) arrive with user story 5; job alerts are here.
 
+pub mod assistant;
 pub mod channels;
 pub mod client;
 pub mod guest_started;

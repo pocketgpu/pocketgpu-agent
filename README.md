@@ -34,6 +34,25 @@ Both scripts are in [`install/`](install). Signed binaries are published at
 is signed with minisign, and `pgpu update` checks that signature before it installs anything.
 There is also a Docker image for rented GPUs: see [`docker/agent.Dockerfile`](docker/agent.Dockerfile).
 
+## AI assistants
+
+Claude Code, Codex and Cursor on the computer can check the GPU, follow your jobs and ping
+your phone when they need you or finish a long task. One command sets them up, shows what it
+will change first, and `pgpu assistants disconnect` takes it all back:
+
+```sh
+pgpu assistants connect
+```
+
+For Claude Code there is also a plugin in this repository ([`plugins/pocketgpu`](plugins/pocketgpu)):
+
+```sh
+claude plugin marketplace add pocketgpu/pocketgpu-agent
+claude plugin install pocketgpu@pocketgpu
+```
+
+Or add only the tools by hand: `claude mcp add --scope user pocketgpu -- pgpu mcp`.
+
 ## What's here
 
 | Crate | What it is |

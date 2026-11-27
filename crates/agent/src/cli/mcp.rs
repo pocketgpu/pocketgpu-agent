@@ -1,8 +1,9 @@
 //! `pgpu mcp`: an MCP server on stdin and stdout for AI agents on this machine (F32, first
 //! step). Claude Code, Codex, Gemini CLI and others start it themselves and get the same
 //! picture as the phone: GPU status, jobs and their output, plus a tool that sends a note to
-//! the paired phones ("tell me when you're done"). Read-only apart from that note; it reaches
-//! the agent the way `pgpu` does, as the same user.
+//! the owner's phones ("tell me when you're done"), sent as an AI assistant alert: free, and
+//! never to guests. Read-only apart from that note; it reaches the agent the way `pgpu`
+//! does, as the same user.
 
 use std::time::{Duration, Instant};
 
@@ -16,15 +17,17 @@ use crate::store::paths::Paths;
 
 /// Protocol versions this server speaks; it answers with the client's when it knows it.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
-/// Notes per hour from one session, so a looping agent can't flood the phone.
-const NOTES_PER_HOUR: usize = 10;
+/// Notes per hour from one session, so a looping agent can't flood the phone. The agent
+/// also counts notes from every session together, up to the same number.
+const NOTES_PER_HOUR: usize = crate::assistants::limits::NOTES_PER_HOUR;
 /// The most output `job_output` reads from the end of a log.
 const TAIL_BYTES: u64 = 64 * 1024;
 
 const INSTRUCTIONS: &str = "PocketGPU shows this machine's GPUs and jobs on the user's phone. \
-Use machine_status before starting GPU work, list_jobs and job_output to follow jobs started \
-with `pgpu run -- <command>`, and notify_phone once when a long task finishes or needs the \
-user. To get an alert when a command ends, run it as `pgpu run -- <command>`.";
+Use machine_status before starting GPU work. Start long jobs as `pgpu run -- <command>` in the \
+background, so your own command timeout can't stop them and the phone gets an alert when they \
+end; follow them with list_jobs and job_output. Use notify_phone once when a long task \
+finishes or needs the user. Never put secrets, file contents or personal data in a note.";
 
 /// How the server reaches the agent; a fake in tests.
 pub(crate) trait Agent {
@@ -154,9 +157,10 @@ impl<A: Agent> Server<A> {
                     body: message.into(),
                 };
                 match self.agent.call(req).await? {
-                    Response::Notified { held: true, .. } => {
-                        Ok("Not sent: the user has paused alerts or turned job alerts off.".into())
-                    }
+                    Response::Notified { held: true, .. } => Ok(
+                        "Not sent: the user has paused alerts or turned AI assistant alerts off."
+                            .into(),
+                    ),
                     Response::Notified {
                         phones: 0,
                         channels: 0,
@@ -216,7 +220,7 @@ fn tools() -> Value {
         },
         {
             "name": "notify_phone",
-            "description": "Send a short note to the user's phone, like a job alert. Use it once when a long task finishes, fails, or needs the user; not for progress updates. At most 10 an hour.",
+            "description": "Send a short note to the user's phone. Use it once when a long task finishes, fails, or needs the user; not for progress updates. Never include secrets, file contents or personal data. At most 10 an hour.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

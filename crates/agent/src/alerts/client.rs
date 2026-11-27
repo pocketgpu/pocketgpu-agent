@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use pocketgpu_proto::push::{HEADER_AGENT, HEADER_SIGNATURE, HEADER_TIMESTAMP, signing_message};
 
 use crate::daemon::state::Agent;
@@ -39,7 +39,11 @@ pub async fn signed_post(
             Ok(r) if r.status().is_success() => return Ok(r),
             // Refused for a reason retrying won't fix (signature, limit, bad request).
             Ok(r) if r.status().is_client_error() => {
-                bail!("the push server refused {path}: {}", r.status())
+                return Err(Refused {
+                    path: path.to_string(),
+                    status: r.status(),
+                }
+                .into());
             }
             Ok(r) => last = Some(anyhow::anyhow!("push server error {}", r.status())),
             Err(e) => {
@@ -52,6 +56,22 @@ pub async fn signed_post(
     }
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no attempt made")))
 }
+
+/// The push server said no (a 4xx); callers can look at the status, such as an older server
+/// that doesn't know an alert kind yet (400).
+#[derive(Debug)]
+pub struct Refused {
+    pub path: String,
+    pub status: reqwest::StatusCode,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the push server refused {}: {}", self.path, self.status)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 pub fn http() -> Result<reqwest::Client> {
     // No redirects: a push server that moves gets a new address in the config, and a

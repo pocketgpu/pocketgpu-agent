@@ -8,6 +8,15 @@ use tokio::sync::mpsc;
 
 /// Accepts HTTP posts, checks the agent signature, and passes the alerts on.
 pub async fn fake_push_server() -> (String, mpsc::Receiver<(bool, AlertRequest)>) {
+    serve(false).await
+}
+
+/// A push server from before AI assistant alerts: a 400 for that kind, as serde gives it.
+pub async fn old_push_server() -> (String, mpsc::Receiver<(bool, AlertRequest)>) {
+    serve(true).await
+}
+
+async fn serve(old: bool) -> (String, mpsc::Receiver<(bool, AlertRequest)>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel(8);
@@ -56,6 +65,15 @@ pub async fn fake_push_server() -> (String, mpsc::Receiver<(bool, AlertRequest)>
                 .verify(&signing_message("POST", "/v1/alerts", ts, &body), &sig)
                 .is_ok();
             let alert: AlertRequest = serde_json::from_slice(&body).unwrap();
+            if old && alert.kind == pocketgpu_proto::push::AlertKind::Assistant {
+                let reply = "invalid alert: unknown variant `assistant`";
+                let res = format!(
+                    "HTTP/1.1 400 Bad Request\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                s.write_all(res.as_bytes()).await.unwrap();
+                continue;
+            }
             let reply = r#"{"delivered":1,"unknown":0,"not_entitled":0}"#;
             let res = format!(
                 "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",

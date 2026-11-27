@@ -1,0 +1,34 @@
+{
+  "description": "Tells the PocketGPU agent when a turn starts, when Claude Code waits for you, when it works again and when it stops, so your phone can ping you. Sends no text from the session.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ]
+  }
+}

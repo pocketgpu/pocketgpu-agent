@@ -1,0 +1,12 @@
+{
+  "conversation_id": "c0ffee00-aaaa-bbbb-cccc-1234567890ab",
+  "generation_id": "gen-42",
+  "model": "claude-sonnet",
+  "hook_event_name": "stop",
+  "cursor_version": "2.1.0",
+  "workspace_roots": ["/Users/ana/proj"],
+  "user_email": null,
+  "transcript_path": null,
+  "status": "completed",
+  "loop_count": 0
+}

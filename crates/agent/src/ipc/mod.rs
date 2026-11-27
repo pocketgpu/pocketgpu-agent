@@ -119,13 +119,36 @@ where
                 continue;
             }
             Request::Notify { title, body } => {
-                let reply = match crate::alerts::sender::send_note(&agent, &title, &body).await {
-                    Ok((phones, channels, held)) => Response::Notified {
-                        phones,
-                        channels,
-                        held,
-                    },
-                    Err(e) => Response::Error(format!("{e:#}")),
+                // Counted here, for every session together: each one runs its own `pgpu mcp`.
+                let reply = if !agent.assistants.allow_note(crate::store::db::now_ms()) {
+                    Response::Error(format!(
+                        "at most {} notes an hour; send one when the task ends",
+                        crate::assistants::limits::NOTES_PER_HOUR
+                    ))
+                } else {
+                    match crate::alerts::sender::send_note(&agent, &title, &body).await {
+                        Ok((phones, channels, held)) => Response::Notified {
+                            phones,
+                            channels,
+                            held,
+                        },
+                        Err(e) => Response::Error(format!("{e:#}")),
+                    }
+                };
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            Request::AssistantEvent {
+                assistant,
+                session,
+                event,
+            } => {
+                // Answered at once; a push, if any, goes out later (`pgpu hook` waits 1 s).
+                let reply = match crate::assistants::event(&agent, &assistant, &session, event) {
+                    Ok(()) => Response::Ok,
+                    Err(e) => Response::Error(e),
                 };
                 if write_frame(&mut w, &reply).await.is_err() {
                     break;
@@ -340,7 +363,9 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         | Request::JobProcess { .. }
         | Request::JobEnd { .. } => Response::Error("no job is running on this connection".into()),
         Request::TestChannels => Response::Error("channel tests run on the stream handler".into()),
-        Request::Notify { .. } => Response::Error("notes run on the stream handler".into()),
+        Request::Notify { .. } | Request::AssistantEvent { .. } => {
+            Response::Error("notes and assistant events run on the stream handler".into())
+        }
         Request::GetDocker | Request::SetDocker { .. } => {
             Response::Error("Docker requests run on the stream handler".into())
         }

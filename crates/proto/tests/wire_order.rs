@@ -139,6 +139,7 @@ fn alert_kinds_keep_their_numbers() {
         AlertKind::DiskFull,
         AlertKind::Unknown,
         AlertKind::GenericText,
+        AlertKind::Assistant,
     ];
     for (n, kind) in kinds.into_iter().enumerate() {
         let rule = AlertRule {

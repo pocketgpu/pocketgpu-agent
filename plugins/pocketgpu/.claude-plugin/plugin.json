@@ -1,0 +1,13 @@
+{
+  "name": "pocketgpu",
+  "displayName": "PocketGPU",
+  "description": "Check the GPU, follow jobs, and ping your phone when Claude Code needs you or finishes a long task. Needs the PocketGPU agent (pgpu) on this computer.",
+  "author": {
+    "name": "PocketGPU",
+    "url": "https://pocketgpu.app"
+  },
+  "homepage": "https://pocketgpu.app/docs/ai-assistants",
+  "repository": "https://github.com/pocketgpu/pocketgpu-agent",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["gpu", "jobs", "phone", "notifications", "mcp"]
+}

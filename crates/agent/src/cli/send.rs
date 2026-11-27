@@ -6,16 +6,13 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use pocketgpu_proto::local::{Request, Response};
 
-use super::files::{absolute, size};
+use super::files::{size, text};
 use crate::ipc::client;
 use crate::store::db::now_ms;
 use crate::store::paths::Paths;
 
 pub async fn run(paths: &Paths, json: bool, file: &Path, to: Option<String>) -> Result<()> {
-    let path = absolute(file)?;
-    if !Path::new(&path).is_file() {
-        bail!("{} is not a file; send one file at a time", file.display());
-    }
+    let path = path_to_send(file)?;
     let offered = match client::call(paths, Request::Offer { path, to }).await? {
         Response::Offered {
             name,
@@ -39,6 +36,20 @@ pub async fn run(paths: &Paths, json: bool, file: &Path, to: Option<String>) -> 
         print!("{}", render(&offered, now_ms()));
     }
     Ok(())
+}
+
+/// The file as the agent gets it: absolute, with links kept. The agent checks both this path
+/// and where it leads for keys and secrets; resolving links here would hide a secret behind
+/// one (`~/.kube/config` is often a link to a cluster file elsewhere).
+fn path_to_send(file: &Path) -> Result<String> {
+    let full = std::path::absolute(file)?;
+    if !full.exists() {
+        bail!("{} doesn't exist or can't be opened", file.display());
+    }
+    if !full.is_file() {
+        bail!("{} is not a file; send one file at a time", file.display());
+    }
+    text(&full)
 }
 
 /// What the agent offered, and to whom.
@@ -103,6 +114,36 @@ fn and_list(names: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A secret behind a link: the path sent keeps the link, so the agent sees `.kube`.
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_reached_through_a_link_is_sent_as_typed() {
+        use crate::files::secrets::any_secret;
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        std::fs::create_dir_all(home.join("clusters")).unwrap();
+        std::fs::create_dir_all(home.join(".kube")).unwrap();
+        let target = home.join("clusters/prod.yaml");
+        std::fs::write(&target, b"token: x").unwrap();
+        let link = home.join(".kube/config");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let homes = vec![home.clone()];
+
+        let sent = path_to_send(&link).unwrap();
+        assert_eq!(Path::new(&sent), link);
+        assert!(any_secret(&[Path::new(&sent)], &homes));
+        // Where it leads looks harmless: only the path as typed gives it away.
+        assert!(!any_secret(&[target.as_path()], &homes));
+        // `..` in the typed path doesn't hide it either.
+        let roundabout = home.join("clusters/../.kube/config");
+        let sent = path_to_send(&roundabout).unwrap();
+        assert!(any_secret(&[Path::new(&sent)], &homes), "{sent}");
+
+        assert!(path_to_send(&home.join("missing")).is_err());
+        let err = path_to_send(&home).unwrap_err().to_string();
+        assert!(err.contains("is not a file"), "{err}");
+    }
 
     fn offered(to: &[&str], pushed: &[&str]) -> Offered {
         let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect();

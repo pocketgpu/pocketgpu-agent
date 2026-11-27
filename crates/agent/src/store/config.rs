@@ -75,6 +75,9 @@ pub struct AlertConfig {
     pub idle_gpu_min: Option<u32>,
     /// What the machine costs an hour, in US cents, for the idle alert's text.
     pub cents_per_hour: Option<u32>,
+    /// AI assistants on this computer (F32): their notes, "needs you" and "finished". Free
+    /// and on by default; an older config without it gets it on.
+    pub assistant: bool,
 }
 
 impl Default for Config {
@@ -117,6 +120,7 @@ impl Default for AlertConfig {
             generic_text: false,
             idle_gpu_min: None,
             cents_per_hour: None,
+            assistant: true,
         }
     }
 }
@@ -160,7 +164,15 @@ mod tests {
         std::fs::write(&path, "name = \"rig-1\"\nshell = true\n").unwrap();
         let cfg = Config::load(&path).unwrap();
         assert!(cfg.shell && !cfg.files && !cfg.clipboard);
+        assert!(
+            cfg.alerts.assistant,
+            "AI assistant alerts are on in an older config"
+        );
         assert!(cfg.files_shared.is_empty() && cfg.files_inbox.is_none());
+
+        std::fs::write(&path, "[alerts]\njob_end = false\n").unwrap();
+        let alerts = Config::load(&path).unwrap().alerts;
+        assert!(!alerts.job_end && alerts.assistant);
 
         let mut cfg = cfg;
         cfg.files = true;

@@ -94,8 +94,8 @@ pub enum Request {
     SetDocker {
         on: bool,
     },
-    /// A short note to the paired phones and alert channels, like a job alert (`pgpu mcp`'s
-    /// notify tool). Replies `Notified`.
+    /// A short note to the owner's phones (never guests) and alert channels, as an AI
+    /// assistant alert (`pgpu mcp`'s notify tool). Replies `Notified`.
     Notify {
         title: String,
         body: String,
@@ -155,8 +155,9 @@ pub enum Request {
     },
     /// Files in the Inbox, newest first. Replies `InboxList`.
     Inbox,
-    /// `pgpu send`: offers a file (an absolute path) for 7 days to devices with Control, or
-    /// to the one named (a device's name or the start of its key). Replies `Offered`.
+    /// `pgpu send`: offers a file (an absolute path) for 7 days to the owner's devices with
+    /// Control, or to the one named (a device's name or the start of its key); never to
+    /// guests, and never keys or secrets. Replies `Offered`.
     Offer {
         path: String,
         to: Option<String>,
@@ -228,6 +229,31 @@ pub enum Request {
     SetLan {
         on: bool,
     },
+    /// `pgpu hook <assistant>` (F32): an AI assistant's hook saw a turn start, a question for
+    /// the user or a turn end. The agent decides whether the phone hears about it. Only the
+    /// assistant's short name and its session id travel, never anything it wrote. Replies
+    /// `Ok` at once; any push goes out later.
+    AssistantEvent {
+        assistant: String,
+        session: String,
+        event: AssistantEventKind,
+    },
+}
+
+/// What an AI assistant's hook saw (F32). Append only: postcard sends the position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AssistantEventKind {
+    /// The user sent a prompt.
+    TurnStarted,
+    /// It asks permission for something; the user may still answer at the desk.
+    NeedsYou,
+    /// It has waited a while for the user's answer.
+    Idle,
+    /// It stopped and handed the turn back.
+    TurnEnded,
+    /// It used a tool, so it is working again: a permission question it asked was answered
+    /// (Claude Code says nothing when the user approves one at the desk).
+    Working,
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -387,7 +413,7 @@ pub enum Response {
         containers: Result<u32, String>,
     },
     /// How a `Notify` went: phones the push server delivered to, and alert channels that
-    /// took it. `held` when alerts are paused or job alerts are off.
+    /// took it. `held` when alerts are paused or AI assistant alerts are off.
     Notified {
         phones: u32,
         channels: u32,
@@ -524,4 +550,36 @@ pub struct PairAsk {
     pub device_fingerprint: String,
     /// Found on this Wi-Fi (F47), not by a code: always asked, never approved in advance.
     pub from_lan: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first byte postcard writes for an enum is the variant's position.
+    fn tag<T: Serialize>(v: &T) -> u8 {
+        postcard::to_allocvec(v).unwrap()[0]
+    }
+
+    #[test]
+    fn assistant_events_keep_their_numbers() {
+        let req = Request::AssistantEvent {
+            assistant: "claude".into(),
+            session: "abc".into(),
+            event: AssistantEventKind::NeedsYou,
+        };
+        assert_eq!(tag(&req), 66, "AssistantEvent moved");
+        let kinds = [
+            AssistantEventKind::TurnStarted,
+            AssistantEventKind::NeedsYou,
+            AssistantEventKind::Idle,
+            AssistantEventKind::TurnEnded,
+            AssistantEventKind::Working,
+        ];
+        for (n, kind) in kinds.into_iter().enumerate() {
+            assert_eq!(tag(&kind) as usize, n, "{kind:?} moved");
+        }
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        assert_eq!(postcard::from_bytes::<Request>(&bytes).unwrap(), req);
+    }
 }

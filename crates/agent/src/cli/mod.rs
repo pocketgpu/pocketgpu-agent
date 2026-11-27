@@ -10,6 +10,7 @@ pub mod actions;
 pub mod ai;
 pub mod alerts;
 pub mod apps;
+pub mod assistants;
 pub mod audit;
 pub mod clip;
 pub mod crash;
@@ -17,6 +18,8 @@ pub mod devices;
 pub mod docker;
 pub mod doctor;
 pub mod files;
+pub mod hook;
+mod hook_scan;
 pub mod inbox;
 pub mod jobs;
 pub mod lan;
@@ -32,6 +35,7 @@ pub mod service;
 pub mod shell;
 pub mod status;
 pub mod update;
+mod windows;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -126,6 +130,20 @@ pub enum Command {
     /// An MCP server on stdin and stdout for AI agents on this machine (Claude Code, Codex,
     /// Gemini CLI): GPU status, jobs and their output, and notes to your phone.
     Mcp,
+    /// AI assistants here (Claude Code, Codex, Cursor) and your phone: list (the default),
+    /// connect or disconnect.
+    Assistants {
+        #[command(subcommand)]
+        action: Option<AssistantsCmd>,
+    },
+    /// What AI assistants' hooks run: pgpu hook <assistant>, with the hook's JSON on stdin.
+    /// Always quiet and successful, so an assistant never waits on PocketGPU.
+    #[command(hide = true)]
+    Hook {
+        assistant: Option<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        payload: Vec<String>,
+    },
     /// Your own iroh-relay: show (the default), set <url>, clear.
     Relay {
         #[command(subcommand)]
@@ -219,6 +237,29 @@ pub enum Command {
     },
 }
 
+/// `pgpu assistants`: set up Claude Code, Codex and Cursor to use PocketGPU (F32).
+#[derive(Debug, Clone, Subcommand)]
+pub enum AssistantsCmd {
+    /// What is connected now (the default).
+    List,
+    /// Find the assistants here, show what will change, then connect them: PocketGPU's tools,
+    /// its skill and, if you say yes, pings to your phone.
+    Connect {
+        /// Only show what would change.
+        #[arg(long)]
+        dry_run: bool,
+        /// Don't ask; yes to pings to your phone too.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove exactly what connect added, nothing else.
+    Disconnect {
+        /// Don't ask.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
 async fn run_job(
     paths: &Paths,
     json: bool,
@@ -252,9 +293,13 @@ fn parse_permission(s: &str) -> Result<pocketgpu_proto::Permission, String> {
 
 /// Exit codes: 0 ok, 1 error, 2 usage (clap's own code).
 pub fn main() -> ExitCode {
+    // Before anything that could print or fail: an assistant's hook must never see output.
+    if let Some(rest) = hook_args(std::env::args_os().skip(1).collect()) {
+        return hook::main(&rest);
+    }
     let cli = Cli::parse();
     #[cfg(windows)]
-    if let Some(code) = drop_admin(&cli) {
+    if let Some(code) = windows::drop_admin(&cli) {
         return code;
     }
     init_logging(matches!(
@@ -272,6 +317,12 @@ pub fn main() -> ExitCode {
     }
 }
 
+/// The arguments after `hook` when this is `pgpu [--json] hook ...`.
+fn hook_args(args: Vec<std::ffi::OsString>) -> Option<Vec<std::ffi::OsString>> {
+    let at = args.iter().position(|a| a != "--json")?;
+    (args[at] == "hook").then(|| args[at + 1..].to_vec())
+}
+
 async fn run(cli: &Cli) -> anyhow::Result<()> {
     let command = cli.command.as_ref().unwrap_or(&Command::Status);
     // Doctor runs as root too, to explain the problem.
@@ -281,7 +332,7 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
     let paths = Paths::discover()?;
     match command {
         Command::Agent { background: false } => crate::daemon::run(paths).await,
-        Command::Agent { background: true } => background(),
+        Command::Agent { background: true } => windows::background(),
         Command::Status => status::run(&paths, cli.json).await,
         Command::Pair { permission } => pair::run(&paths, cli.json, *permission).await,
         Command::Doctor => doctor::run(&paths, cli.json).await,
@@ -313,12 +364,19 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
         Command::Mcp => mcp::run(&paths).await,
+        Command::Assistants { action } => assistants::run(
+            &paths,
+            cli.json,
+            action.clone().unwrap_or(AssistantsCmd::List),
+        ),
+        // `main` runs hooks before this; kept so `pgpu --help` parsing knows the command.
+        Command::Hook { .. } => Ok(()),
         Command::Relay { action } => relay::run(&paths, cli.json, action.clone()).await,
         Command::Update { check, version } => {
             update::run(cli.json, *check, version.as_deref()).await
         }
-        Command::RestartAgent => restart_agent(),
-        Command::WatchAgent => watch_agent(),
+        Command::RestartAgent => windows::restart_agent(),
+        Command::WatchAgent => windows::watch_agent(),
         Command::CrashReports { action } => crash::run(&paths, cli.json, *action).await,
     }
 }
@@ -348,63 +406,4 @@ fn init_logging(daemon: bool) {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-}
-
-#[cfg(windows)]
-fn background() -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?;
-    service::start_background(&exe)
-}
-
-#[cfg(windows)]
-fn restart_agent() -> anyhow::Result<()> {
-    service::start_when_stopped()
-}
-
-#[cfg(not(windows))]
-fn restart_agent() -> anyhow::Result<()> {
-    anyhow::bail!("restart-agent is for Windows; use pgpu service install")
-}
-
-#[cfg(windows)]
-fn watch_agent() -> anyhow::Result<()> {
-    service::watch_agent()
-}
-
-#[cfg(not(windows))]
-fn watch_agent() -> anyhow::Result<()> {
-    anyhow::bail!("watch-agent is for Windows; use pgpu service install")
-}
-
-#[cfg(not(windows))]
-fn background() -> anyhow::Result<()> {
-    anyhow::bail!("--background is for Windows; on Linux and macOS, use `pgpu service install`")
-}
-
-/// Started as Administrator: runs the same command again without admin rights (see
-/// `winsys::unelevated`). `None` when this process may go on itself.
-#[cfg(windows)]
-fn drop_admin(cli: &Cli) -> Option<ExitCode> {
-    use crate::winsys::unelevated;
-    if unelevated::is_child() {
-        // Ctrl+C at the Administrator console still reaches this one.
-        unelevated::follow_parent();
-        return None;
-    }
-    // A service account stays one with fewer rights; the root check then refuses it.
-    if !crate::winsys::is_elevated() || crate::winsys::is_service_account() {
-        return None;
-    }
-    // Said once where it matters; `pgpu doctor` shows it too.
-    if !cli.json && matches!(cli.command, Some(Command::Agent { background: false })) {
-        eprintln!("Started as Administrator; running without admin rights.");
-    }
-    match unelevated::run_unelevated() {
-        Ok(code) => Some(ExitCode::from(u8::try_from(code).unwrap_or(1))),
-        // root::check then refuses, as before.
-        Err(e) => {
-            eprintln!("warning: {e:#}");
-            None
-        }
-    }
 }

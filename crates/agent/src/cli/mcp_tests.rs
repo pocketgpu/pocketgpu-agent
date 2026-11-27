@@ -86,6 +86,10 @@ async fn introduces_itself_and_its_tools() {
     assert_eq!(r["id"], 1);
     assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(r["result"]["serverInfo"]["name"], "pocketgpu");
+    // Long jobs go to the background, out of reach of the assistant's own timeout.
+    let instructions = r["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("`pgpu run -- <command>` in the background"));
+    assert!(instructions.contains("Never put secrets"));
     // An unknown version gets the newest one.
     let r = ask(
         &mut s,
@@ -206,4 +210,5 @@ async fn held_notes_say_so() {
     });
     let (text, err) = call(&mut s, "notify_phone", json!({ "message": "done" })).await;
     assert!(!err && text.contains("paused"));
+    assert!(text.contains("AI assistant alerts off"), "{text}");
 }

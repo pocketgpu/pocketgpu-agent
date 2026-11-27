@@ -4,6 +4,7 @@ pub mod actions;
 pub mod ai;
 pub mod alerts;
 pub mod apps;
+pub mod assistants;
 pub mod audit;
 pub mod cli;
 pub mod clip;

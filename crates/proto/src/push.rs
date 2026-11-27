@@ -44,12 +44,19 @@ pub enum AlertKind {
     IdleGpu,
     /// A guest first opened a shared model's link (F48): free, like the share.
     GuestStarted,
+    /// An AI assistant on the computer (F32): a note it sent, it needs you, or it finished.
+    /// Free on every plan (decided 26 Nov 2026). An older push server answers 400 to it.
+    Assistant,
 }
 
 impl AlertKind {
-    /// Only job alerts, new-device alerts and a guest starting reach Free tickets.
+    /// Job alerts, new-device alerts, a guest starting and AI assistant alerts reach Free
+    /// tickets; the rest need Pro.
     pub fn needs_pro(self) -> bool {
-        !matches!(self, Self::JobEnd | Self::NewDevice | Self::GuestStarted)
+        !matches!(
+            self,
+            Self::JobEnd | Self::NewDevice | Self::GuestStarted | Self::Assistant
+        )
     }
 }
 
@@ -117,6 +124,17 @@ mod tests {
         assert_ne!(a, signing_message("POST", "/v1/alerts", 2, b"{}"));
         assert_ne!(a, signing_message("POST", "/v1/alerts", 1, b"{ }"));
         assert_ne!(a, signing_message("POST", "/v1/heartbeat", 1, b"{}"));
+    }
+
+    #[test]
+    fn assistant_alerts_are_free_and_named_like_the_others() {
+        assert!(!AlertKind::Assistant.needs_pro());
+        assert!(AlertKind::GpuTemp.needs_pro());
+        // The agent sends JSON to the push server, so the name is what must not change.
+        let json = serde_json::to_string(&AlertKind::Assistant).unwrap();
+        assert_eq!(json, "\"assistant\"");
+        let back: AlertKind = serde_json::from_str("\"assistant\"").unwrap();
+        assert_eq!(back, AlertKind::Assistant);
     }
 
     #[test]

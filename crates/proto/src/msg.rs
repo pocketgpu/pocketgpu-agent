@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{Error, MachineInfo, Permission, Platform, Sample};
 
-/// The proto version the app speaks, sent in `Hello`.
-pub const PROTO_VERSION: u16 = 1;
+/// The proto version the app speaks, sent in `Hello` and `Status`. The agent uses it to
+/// leave out what an older app can't read.
+/// 1: the first. 2: reads `AlertKind::Assistant` (F32).
+pub const PROTO_VERSION: u16 = 2;
 
 pub mod pair {
     use super::*;
@@ -147,8 +149,13 @@ pub mod control {
         DiskFull,
         Unknown,
         /// Not an alert: when enabled, pushes leave out job names and details (FR-023).
-        /// Last, so the other kinds keep their wire numbers.
+        /// Its place is fixed, so the other kinds keep their wire numbers.
         GenericText,
+        /// An AI assistant on the computer (F32): a note it sent, it needs you, or it
+        /// finished. Free on every plan. Appended, because postcard sends a variant as its
+        /// position; a phone from before it can't read this kind, so the agent should leave
+        /// the rule out of the list it sends such a phone.
+        Assistant,
     }
 
     /// The idle GPU alert (F38, Pro): every GPU on the machine under 5% load for `minutes`.

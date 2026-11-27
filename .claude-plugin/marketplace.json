@@ -1,0 +1,15 @@
+{
+  "name": "pocketgpu",
+  "description": "PocketGPU: your GPU computer on your phone",
+  "owner": {
+    "name": "PocketGPU",
+    "url": "https://pocketgpu.app"
+  },
+  "plugins": [
+    {
+      "name": "pocketgpu",
+      "source": "./plugins/pocketgpu",
+      "description": "Check the GPU, follow jobs, and ping your phone when Claude Code needs you or finishes a long task."
+    }
+  ]
+}

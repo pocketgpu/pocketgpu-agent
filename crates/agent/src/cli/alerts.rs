@@ -29,8 +29,10 @@ pub fn parse_kind(s: &str) -> Result<AlertKind> {
         "offline" => AlertKind::Offline,
         "ollama-down" | "ollama" => AlertKind::OllamaDown,
         "generic-text" | "generic" => AlertKind::GenericText,
+        "assistant" | "assistants" | "ai" => AlertKind::Assistant,
         _ => bail!(
-            "unknown alert {s:?}; use job-end, gpu-temp, disk-full, offline, ollama-down or generic-text"
+            "unknown alert {s:?}; use job-end, assistant, gpu-temp, disk-full, offline, \
+             ollama-down or generic-text"
         ),
     })
 }
@@ -44,6 +46,7 @@ fn name(kind: AlertKind) -> &'static str {
         AlertKind::OllamaDown => "ollama-down",
         AlertKind::Unknown => "unknown",
         AlertKind::GenericText => "generic-text",
+        AlertKind::Assistant => "assistant",
     }
 }
 
@@ -101,9 +104,9 @@ pub fn render(rules: &[AlertRule]) -> String {
             (Some((_, _, unit)), Some(v)) => format!("{v} {unit}"),
             _ => String::new(),
         };
-        // Job alerts are free, and generic text is a setting, not an alert.
+        // Job and AI assistant alerts are free, and generic text is a setting, not an alert.
         let plan = match r.kind {
-            AlertKind::JobEnd | AlertKind::GenericText => "",
+            AlertKind::JobEnd | AlertKind::Assistant | AlertKind::GenericText => "",
             _ => "Pro",
         };
         out += &format!("{:<12} {:<4} {:<13} {plan}\n", name(r.kind), state, limit);

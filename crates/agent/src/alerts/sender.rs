@@ -155,50 +155,20 @@ async fn send_job_alert(agent: &Agent, http: &reqwest::Client, job: &JobEnded) -
     Ok(())
 }
 
-/// A note from `pgpu mcp` (an AI agent on this machine) to every phone and alert channel,
-/// sent like a job alert: free on every plan, off when job alerts are off or paused, and
-/// generic when the user hides alert text. Returns phones delivered, channels that took it
-/// and whether it was held.
+/// A note from `pgpu mcp` (an AI assistant on this machine) to the owner's phones and the
+/// alert channels, as an AI assistant alert (`super::assistant`): free on every plan, off
+/// when assistant alerts are off or paused, never to guests, and generic when the user hides
+/// alert text. Returns phones delivered, channels that took it and whether it was held.
 pub async fn send_note(agent: &Agent, title: &str, body: &str) -> Result<(u32, u32, bool)> {
-    let (enabled, generic, push_url) = {
-        let cfg = agent.config.read().expect("config lock poisoned");
-        (
-            cfg.alerts.job_end,
-            cfg.alerts.generic_text,
-            cfg.push_url.clone(),
-        )
-    };
-    if !enabled || super::paused_until(agent).is_some() {
-        return Ok((0, 0, true));
-    }
-    let machine = agent.name();
-    let (title, body) = note_text(title, body, &machine, generic);
-    let alert = super::channels::Alert {
-        title: title.clone(),
-        body: body.clone(),
-        kind: "note",
-        machine,
-        job: None,
-    };
-    let channels = super::channels::send_all(agent, &alert)
-        .await
-        .iter()
-        .filter(|(_, err)| err.is_none())
-        .count() as u32;
-    let tickets = devices::push_tickets(&agent.db())?;
-    if tickets.is_empty() {
-        return Ok((0, channels, false));
-    }
-    let http = super::client::http()?;
-    let alert = AlertRequest {
-        tickets,
-        kind: AlertKind::JobEnd,
-        title,
-        body,
-        link: Some(format!("pocketgpu://machine/{}", agent.identity.agent_id())),
-    };
-    let result = post(agent, &http, &push_url, &alert).await?;
-    Ok((result.delivered, channels, false))
+    let generic = agent
+        .config
+        .read()
+        .expect("config lock poisoned")
+        .alerts
+        .generic_text;
+    let (title, body) = note_text(title, body, &agent.name(), generic);
+    let sent = super::assistant::send(agent, title, body, super::assistant::NOTE).await?;
+    Ok((sent.phones, sent.channels, sent.held))
 }
 
 /// A note's push text: as given, clipped to push limits, or generic when alert text is hidden.
