@@ -242,6 +242,17 @@ pub async fn handle(agent: &Arc<Agent>, peer: &Peer, req: Request) -> Response {
             Ok(_) => Response::Ok,
             Err(e) => Response::Error(Error::new(ErrorCode::Internal, e.to_string())),
         },
+        Request::ListApprovals => super::assistants::list(agent, peer),
+        Request::AnswerApproval {
+            id,
+            opened_ms,
+            allow,
+        } => super::assistants::answer(agent, peer, id, opened_ms, allow),
+        Request::SetAssistantSettings(s) => super::assistants::set_settings(agent, peer, s),
+        Request::GetAssistants => super::assistants::get(agent, peer),
+        Request::AssistantActivity { since_ms } => {
+            super::assistants::activity(agent, peer, since_ms)
+        }
     }
 }
 
@@ -293,6 +304,16 @@ fn describe(req: &Request) -> String {
         Request::ChangeShare(c) => format!("ChangeShare {}", c.share),
         Request::ExtendGuest { .. } => "ExtendGuest".into(),
         Request::PowerAction { action } => format!("PowerAction {}", action.as_str()),
+        Request::ListApprovals => "ListApprovals".into(),
+        Request::AnswerApproval { id, allow, .. } => {
+            format!(
+                "AnswerApproval {id} {}",
+                if *allow { "allow" } else { "deny" }
+            )
+        }
+        Request::GetAssistants => "GetAssistants".into(),
+        Request::SetAssistantSettings(_) => "SetAssistantSettings".into(),
+        Request::AssistantActivity { .. } => "AssistantActivity".into(),
     }
 }
 

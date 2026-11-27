@@ -25,6 +25,20 @@ Call `notify_phone` once when a long task finishes, fails or needs a decision fr
 
 Never put secrets, keys, passwords, file contents or personal data in a note.
 
+## Files and text for the phone
+
+When the user asks for a file on their phone (a result, a plot, a log), offer it:
+
+    pgpu send <file>
+
+The phone gets a push and can save it for 7 days. Send only what the user asked for; a file that looks like a secret (keys, `.env`) is refused.
+
+To hand the user some text to paste on the phone (a command, a URL, the end of a log), put it on PocketGPU's clipboard from stdin:
+
+    tail -20 train.log | pgpu clip put
+
+Tell the user it's there. Never put secrets, keys or passwords on it.
+
 ## When PocketGPU isn't there
 
 If the tools fail or `pgpu` isn't installed, say so and carry on without it. Don't install anything.

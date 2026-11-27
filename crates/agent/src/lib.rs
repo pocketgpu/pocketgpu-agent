@@ -38,6 +38,7 @@ pub mod winsys;
 pub const AGENT_ONLY_ENV: &[&str] = &[
     "PGPU_FAKE_GPU",
     "PGPU_FAKE_POWER",
+    "PGPU_FAKE_PUSH",
     "PGPU_CLIPBOARD",
     "PGPU_UNELEVATED",
     "PGPU_SERVICE",

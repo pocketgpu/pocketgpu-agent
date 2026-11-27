@@ -66,6 +66,11 @@ impl Agent {
         paths.create_all()?;
         let identity = Identity::load_or_create(&paths.key_file())?;
         let config = config::Config::load(&paths.config_file())?;
+        // What the hooks read while this agent is down (F32): kept in step with the config,
+        // also after a hand edit.
+        if let Err(e) = crate::assistants::guard::write(&paths, config.assistants.armed()) {
+            tracing::warn!("could not write the assistants guard file: {e:#}");
+        }
         let db = db::open(&paths.db_file())?;
         Ok(Self::assemble(paths, identity, config, db, gpus))
     }

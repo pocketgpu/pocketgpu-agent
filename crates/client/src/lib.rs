@@ -4,6 +4,7 @@
 //! the same machine (1.2).
 
 mod apps;
+pub mod assistants;
 mod clip;
 mod compat;
 mod docker;
@@ -31,6 +32,7 @@ use pocketgpu_proto::{FrameError, Platform, Sample, alpn, read_frame, write_fram
 use serde::{Serialize, de::DeserializeOwned};
 
 pub use apps::{Forward, Reach};
+pub use assistants::Assistants;
 pub use clip::ClipContent;
 pub use docker::ContainerLog;
 pub use events::EventStream;

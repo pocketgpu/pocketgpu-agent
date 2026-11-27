@@ -129,6 +129,17 @@ pub fn owner_push_tickets(db: &Connection) -> Result<Vec<String>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Push tickets of the owner's Full control devices: paired for good (never a guest) and
+/// with Shell. Only these get an approval push (F32), since only they may answer it.
+pub fn owner_shell_push_tickets(db: &Connection) -> Result<Vec<String>> {
+    let mut stmt = db.prepare(
+        "SELECT push_ticket FROM devices WHERE push_ticket IS NOT NULL AND expires_ms IS NULL
+         AND permission = ?1",
+    )?;
+    let rows = stmt.query_map([Permission::Shell.as_str()], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Whether this device is a guest (F44): paired only until an end time.
 pub fn is_guest(db: &Connection, device_id: &str) -> Result<bool> {
     Ok(get(db, device_id)?.is_some_and(|d| d.expires_ms.is_some()))
@@ -171,5 +182,22 @@ mod tests {
         assert!(is_guest(&db, "guest").unwrap());
         assert!(!is_guest(&db, "owner").unwrap());
         assert!(!is_guest(&db, "nobody").unwrap());
+    }
+
+    #[test]
+    fn approval_tickets_are_the_owners_full_control_devices() {
+        let db = open_in_memory().unwrap();
+        let add = |id: &str, p: Permission| {
+            upsert(&db, id, id, Platform::Ios, p, Some(&format!("t-{id}"))).unwrap()
+        };
+        add("full", Permission::Shell);
+        add("control", Permission::Control);
+        add("view", Permission::View);
+        add("guest", Permission::Shell);
+        set_expiry(&db, "guest", Some(i64::MAX / 2)).unwrap();
+        assert_eq!(
+            owner_shell_push_tickets(&db).unwrap(),
+            vec!["t-full".to_string()]
+        );
     }
 }

@@ -57,6 +57,10 @@ pub fn status(ctx: &Ctx) -> Result<Status> {
         skill: skill::present(&ctx.places.agents_dir.join("skills")),
         hooks: hooks::missing(&text, &EVENTS, ME.id()).is_ok_and(|m| m.is_empty()),
         plugin: false,
+        // No approval hooks for it yet (F32: Codex after its live check, Cursor with T038).
+        ask: false,
+        check: false,
+        check_blocked: None,
     })
 }
 
@@ -83,9 +87,18 @@ pub fn mcp_present(places: &Places) -> bool {
 fn mcp_step(ctx: &Ctx) -> Result<Step> {
     let exe = ctx.exe.to_string_lossy().into_owned();
     if let Some(cli) = ctx.runner.find("codex") {
-        let args: Vec<String> = ["mcp", "add", "pocketgpu", "--", &exe, "mcp"]
-            .map(str::to_string)
-            .to_vec();
+        let args: Vec<String> = [
+            "mcp",
+            "add",
+            "pocketgpu",
+            "--",
+            &exe,
+            "mcp",
+            "--assistant",
+            ME.id(),
+        ]
+        .map(str::to_string)
+        .to_vec();
         return Ok(Step {
             assistant: ME,
             part: Part::Mcp,
@@ -112,8 +125,9 @@ fn mcp_step(ctx: &Ctx) -> Result<Step> {
         "\n\n"
     };
     let table = format!(
-        "{gap}[mcp_servers.pocketgpu]\ncommand = {}\nargs = [\"mcp\"]\n",
-        toml::Value::String(exe)
+        "{gap}[mcp_servers.pocketgpu]\ncommand = {}\nargs = [\"mcp\", \"--assistant\", \"{}\"]\n",
+        toml::Value::String(exe),
+        ME.id()
     );
     let after = format!("{old}{table}");
     toml::from_str::<toml::Table>(&after)

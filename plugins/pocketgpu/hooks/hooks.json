@@ -1,5 +1,5 @@
 {
-  "description": "Tells the PocketGPU agent when a turn starts, when Claude Code waits for you, when it works again and when it stops, so your phone can ping you. Sends no text from the session.",
+  "description": "Tells the PocketGPU agent when a turn starts, when Claude Code waits for you, when it works again and when it stops, so your phone can ping you; with Ask on my phone turned on, lets your phone answer what Claude Code asks you. Pings carry no text from the session.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -27,6 +27,20 @@
       {
         "hooks": [
           { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude", "async": true }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pgpu hook claude --ask", "timeout": 330 }
         ]
       }
     ]

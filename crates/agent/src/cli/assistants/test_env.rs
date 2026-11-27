@@ -47,6 +47,8 @@ pub(super) struct Fake {
     places: Places,
     have: Vec<&'static str>,
     pub(super) plugins: String,
+    /// What `claude --version` prints.
+    pub(super) version: String,
     pub(super) calls: RefCell<Vec<String>>,
     saved: RefCell<HashMap<PathBuf, Option<String>>>,
 }
@@ -75,6 +77,7 @@ impl Runner for Fake {
         };
         match (name.as_str(), args.as_slice()) {
             ("claude", ["plugin", "list", "--json"]) => Ok(ok(&self.plugins)),
+            ("claude", ["--version"]) => Ok(ok(&self.version)),
             (
                 "claude",
                 [
@@ -86,18 +89,34 @@ impl Runner for Fake {
                     "--",
                     exe,
                     "mcp",
+                    "--assistant",
+                    "claude",
                 ],
             ) => {
                 let text = self.keep(&file);
-                let server = json!({ "type": "stdio", "command": exe, "args": ["mcp"] });
+                let server = json!({ "type": "stdio", "command": exe,
+                    "args": ["mcp", "--assistant", "claude"] });
                 let new = jsonedit::insert(&text, &["mcpServers"], "pocketgpu", &server)?;
                 std::fs::write(&file, new)?;
                 Ok(ok("Added"))
             }
-            ("codex", ["mcp", "add", "pocketgpu", "--", exe, "mcp"]) => {
+            (
+                "codex",
+                [
+                    "mcp",
+                    "add",
+                    "pocketgpu",
+                    "--",
+                    exe,
+                    "mcp",
+                    "--assistant",
+                    "codex",
+                ],
+            ) => {
                 let text = self.keep(&file);
-                let table =
-                    format!("\n[mcp_servers.pocketgpu]\ncommand = {exe:?}\nargs = [\"mcp\"]\n");
+                let table = format!(
+                    "\n[mcp_servers.pocketgpu]\ncommand = {exe:?}\nargs = [\"mcp\", \"--assistant\", \"codex\"]\n"
+                );
                 std::fs::write(&file, format!("{text}{table}"))?;
                 Ok(ok("Added"))
             }
@@ -142,6 +161,7 @@ pub(super) fn env(have: &[&'static str]) -> Env {
         places: places.clone(),
         have: have.to_vec(),
         plugins: "[]".into(),
+        version: "2.1.332 (Claude Code)\n".into(),
         calls: RefCell::default(),
         saved: RefCell::default(),
     };

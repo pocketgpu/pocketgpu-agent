@@ -1,5 +1,6 @@
 //! The list of changes connect made, in the agent's data folder, and taking them back.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -15,6 +16,10 @@ use super::plan::{Change, FileUndo, Record};
 pub struct Manifest {
     pub version: u32,
     pub changes: Vec<Record>,
+    /// Assistant id → why "Ask me first" can't work for it here (F32), from the last connect
+    /// or `pgpu assistants`; the agent reads it ([`crate::assistants::blocked`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub check_blocked: BTreeMap<String, String>,
 }
 
 impl Manifest {
@@ -29,7 +34,7 @@ impl Manifest {
     /// Saved after every change, so a failure halfway still leaves an accurate list.
     pub fn save(&self, places: &Places) -> Result<()> {
         let path = places.manifest();
-        if self.changes.is_empty() {
+        if self.changes.is_empty() && self.check_blocked.is_empty() {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(places.backups());
             if let Some(dir) = path.parent() {
@@ -43,8 +48,24 @@ impl Manifest {
         let text = serde_json::to_string_pretty(&Manifest {
             version: 1,
             changes: self.changes.clone(),
+            check_blocked: self.check_blocked.clone(),
         })?;
         crate::store::paths::write_private(&path, text.as_bytes())
+    }
+
+    /// Records why "Ask me first" can't work for `assistant` (or that it can), saving only
+    /// when that changed.
+    pub fn record_blocked(places: &Places, assistant: &str, why: Option<String>) -> Result<()> {
+        let mut m = Self::load(places)?;
+        let before = m.check_blocked.get(assistant).cloned();
+        if before == why {
+            return Ok(());
+        }
+        match why {
+            Some(why) => m.check_blocked.insert(assistant.to_string(), why),
+            None => m.check_blocked.remove(assistant),
+        };
+        m.save(places)
     }
 
     /// Whether connect wrote this file and it still holds exactly that.

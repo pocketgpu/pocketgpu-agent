@@ -544,3 +544,64 @@ fn share_messages_keep_their_numbers() {
     assert_eq!(tag(&AgentToGuest::Refused(GuestRefusal::Ended)), 4);
     assert_eq!(tag(&GuestState::Ready), 0);
 }
+
+#[test]
+fn assistant_messages_keep_their_numbers() {
+    use pocketgpu_proto::assistants::AssistantSettings;
+    use pocketgpu_proto::types::Permission;
+    assert_eq!(tag(&Request::ListApprovals), 35);
+    let answer = Request::AnswerApproval {
+        id: 1,
+        opened_ms: 2,
+        allow: false,
+    };
+    assert_eq!(tag(&answer), 36);
+    assert_eq!(tag(&Request::GetAssistants), 37);
+    let set = Request::SetAssistantSettings(AssistantSettings::default());
+    assert_eq!(tag(&set), 38);
+    assert_eq!(tag(&Request::AssistantActivity { since_ms: 0 }), 39);
+    assert_eq!(tag(&Response::Approvals(vec![])), 27);
+    let list = Response::Assistants {
+        connected: vec![],
+        settings: None,
+    };
+    assert_eq!(tag(&list), 29);
+    assert_eq!(tag(&Response::Activity(vec![])), 30);
+    assert_eq!(Request::GetAssistants.min_permission(), Permission::View);
+    for shell in [Request::ListApprovals, answer, set] {
+        assert_eq!(shell.min_permission(), Permission::Shell, "{shell:?}");
+    }
+    assert_eq!(pocketgpu_proto::msg::PROTO_VERSION, 3);
+}
+
+#[test]
+fn assistant_tools_keep_their_numbers() {
+    use pocketgpu_proto::assistants::ToolCall;
+    use pocketgpu_proto::local::{Request as Local, Response as LocalReply};
+    use pocketgpu_proto::types::Permission;
+    let offer = ToolCall::OfferFile { path: "/a".into() };
+    let stop = ToolCall::StopJob { number: 3 };
+    let run = ToolCall::RunAction { name: "x".into() };
+    assert_eq!(tag(&offer), 0);
+    assert_eq!(tag(&stop), 1);
+    assert_eq!(tag(&run), 2);
+    assert_eq!(offer.needs(), Permission::Control);
+    assert_eq!(stop.needs(), Permission::Control);
+    assert_eq!(run.needs(), Permission::Shell);
+    let req = Local::AssistantTool {
+        assistant: "claude".into(),
+        folder: "/w".into(),
+        since_ms: 1,
+        call: run,
+    };
+    assert_eq!(tag(&req), 71, "AssistantTool moved");
+    let bytes = postcard::to_allocvec(&req).unwrap();
+    assert_eq!(postcard::from_bytes::<Local>(&bytes).unwrap(), req);
+    let ran = LocalReply::ActionRan {
+        exit_code: Some(0),
+        output: String::new(),
+        duration_ms: 1,
+        timed_out: false,
+    };
+    assert_eq!(tag(&ran), 40, "ActionRan moved");
+}

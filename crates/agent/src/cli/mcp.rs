@@ -2,8 +2,11 @@
 //! step). Claude Code, Codex, Gemini CLI and others start it themselves and get the same
 //! picture as the phone: GPU status, jobs and their output, plus a tool that sends a note to
 //! the owner's phones ("tell me when you're done"), sent as an AI assistant alert: free, and
-//! never to guests. Read-only apart from that note; it reaches the agent the way `pgpu`
-//! does, as the same user.
+//! never to guests. It reaches the agent the way `pgpu` does, as the same user.
+//!
+//! `--assistant <id>` (written by `pgpu assistants connect`) names the assistant; tools
+//! beyond View (`offer_file`, `stop_job`, `run_action`, in `mcp_tools.rs`) send it with each
+//! call and the agent checks that assistant's level (missing means View).
 
 use std::time::{Duration, Instant};
 
@@ -12,6 +15,7 @@ use pocketgpu_proto::local::{Request, Response};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use super::mcp_tools;
 use crate::ipc::client;
 use crate::store::paths::Paths;
 
@@ -27,7 +31,9 @@ const INSTRUCTIONS: &str = "PocketGPU shows this machine's GPUs and jobs on the 
 Use machine_status before starting GPU work. Start long jobs as `pgpu run -- <command>` in the \
 background, so your own command timeout can't stop them and the phone gets an alert when they \
 end; follow them with list_jobs and job_output. Use notify_phone once when a long task \
-finishes or needs the user. Never put secrets, file contents or personal data in a note.";
+finishes or needs the user. Never put secrets, file contents or personal data in a note. \
+offer_file, stop_job and run_action need a higher level the user sets for you; if one is \
+refused, tell the user what the refusal says instead of working around it.";
 
 /// How the server reaches the agent; a fake in tests.
 pub(crate) trait Agent {
@@ -42,8 +48,12 @@ impl Agent for Local<'_> {
     }
 }
 
-pub async fn run(paths: &Paths) -> Result<()> {
-    let mut server = Server::new(Local(paths));
+pub async fn run(paths: &Paths, assistant: Option<String>) -> Result<()> {
+    // The folder the assistant started it in: `stop_job` stops only jobs started there.
+    let folder = std::env::current_dir()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut server = Server::new(Local(paths)).for_assistant(assistant, folder);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
@@ -62,6 +72,12 @@ pub async fn run(paths: &Paths) -> Result<()> {
 pub(crate) struct Server<A> {
     agent: A,
     notes: Vec<Instant>,
+    /// From `--assistant`; empty when it was started without (the agent then refuses
+    /// every tool beyond View).
+    assistant: String,
+    /// The folder it started in, and when: this session's jobs.
+    folder: String,
+    since_ms: i64,
 }
 
 impl<A: Agent> Server<A> {
@@ -69,7 +85,16 @@ impl<A: Agent> Server<A> {
         Self {
             agent,
             notes: Vec::new(),
+            assistant: String::new(),
+            folder: String::new(),
+            since_ms: crate::store::db::now_ms(),
         }
+    }
+
+    pub(crate) fn for_assistant(mut self, assistant: Option<String>, folder: String) -> Self {
+        self.assistant = assistant.unwrap_or_default();
+        self.folder = folder;
+        self
     }
 
     /// The reply to one JSON-RPC message; `None` for notifications.
@@ -181,12 +206,30 @@ impl<A: Agent> Server<A> {
                     other => unexpected(other),
                 }
             }
+            name if mcp_tools::NAMES.contains(&name) => {
+                let call = mcp_tools::parse(name, args)?;
+                let req = Request::AssistantTool {
+                    assistant: self.assistant.clone(),
+                    folder: self.folder.clone(),
+                    since_ms: self.since_ms,
+                    call: call.clone(),
+                };
+                mcp_tools::reply(&call, self.agent.call(req).await?)
+            }
             other => bail!("no tool named {other}"),
         }
     }
 }
 
 fn tools() -> Value {
+    let mut all = view_tools();
+    if let Value::Array(list) = &mut all {
+        list.extend(mcp_tools::tools());
+    }
+    all
+}
+
+fn view_tools() -> Value {
     json!([
         {
             "name": "machine_status",

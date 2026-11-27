@@ -154,6 +154,17 @@ pub fn list(db: &Connection, limit: u32, before: Option<u64>) -> Result<Vec<JobS
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Where and when the job started: its folder and `started_at`, for F32's `stop_job`.
+pub fn origin(db: &Connection, id: u64) -> Result<Option<(String, i64)>> {
+    Ok(db
+        .query_row(
+            "SELECT cwd, started_at FROM jobs WHERE job_id = ?1",
+            [id as i64],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
 pub fn get(db: &Connection, id: u64) -> Result<Option<(JobDetail, PathBuf)>> {
     let row = db
         .query_row("SELECT * FROM jobs WHERE job_id = ?1", [id as i64], |r| {

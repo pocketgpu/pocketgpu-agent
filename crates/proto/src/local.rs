@@ -238,6 +238,45 @@ pub enum Request {
         session: String,
         event: AssistantEventKind,
     },
+    /// `pgpu hook <assistant> --check` (F32), before every tool call: holds the action for
+    /// the phone when "Ask me first" matches. Two replies: `AssistantAnswer(Pass)` or
+    /// `AssistantHeld` within 1 s, then the final `AssistantAnswer` for a held one.
+    AssistantCheck {
+        assistant: String,
+        session: String,
+        /// Claude Code's `permission_mode`; the fail-closed answer depends on it.
+        permission_mode: String,
+        tool: String,
+        /// At most `assistants::INPUT_MAX` bytes.
+        input: String,
+        /// The input was over `INPUT_MAX` or didn't parse.
+        oversize: bool,
+        folder: String,
+    },
+    /// `pgpu hook <assistant> --ask` (F32), when the assistant would ask at the desk; replies
+    /// as `AssistantCheck`.
+    AssistantAsk {
+        assistant: String,
+        session: String,
+        tool: String,
+        input: String,
+        folder: String,
+    },
+    /// The `[assistants]` settings (F32, `pgpu assistants set`). Replies `AssistantSettings`.
+    GetAssistantSettings,
+    /// Changes them at the computer; audited and the guard file rewritten. Replies
+    /// `AssistantSettings`, or `Error` when they don't validate.
+    SetAssistantSettings(crate::assistants::AssistantSettings),
+    /// `pgpu mcp --assistant <id>` (F32): a tool that needs more than View. The agent checks
+    /// the assistant's level (missing means View) and audits a refusal as `assistant_refused`.
+    /// `folder` and `since_ms` are the MCP server's folder and start: `stop_job` stops only
+    /// jobs started there since. Replies `Offered`, `Ok`, `ActionRan` or `Error`.
+    AssistantTool {
+        assistant: String,
+        folder: String,
+        since_ms: i64,
+        call: crate::assistants::ToolCall,
+    },
 }
 
 /// What an AI assistant's hook saw (F32). Append only: postcard sends the position.
@@ -254,6 +293,11 @@ pub enum AssistantEventKind {
     /// It used a tool, so it is working again: a permission question it asked was answered
     /// (Claude Code says nothing when the user approves one at the desk).
     Working,
+    /// A tool call ended (`PostToolUse` or `PostToolUseFailure`): also working again, and the
+    /// desk answered a held "Ask on my phone" request with this hash of the tool and its
+    /// input (`assistants::answers::input_hash` on the agent). An agent from before it
+    /// refuses the request; the hook doesn't mind.
+    ToolDone { input_hash: [u8; 32] },
 }
 
 /// How many remote actions show a notice on this computer (F35). There is no off.
@@ -450,6 +494,19 @@ pub enum Response {
     Screen(ScreenStatus),
     ModelServers(Vec<crate::ai::ModelServer>),
     Lan(LanStatus),
+    /// The action waits for the phone; the final `AssistantAnswer` follows (F32).
+    AssistantHeld {
+        id: u64,
+    },
+    AssistantAnswer(crate::assistants::Answer),
+    AssistantSettings(crate::assistants::AssistantSettings),
+    /// A saved action ran for an assistant's `run_action` (F32).
+    ActionRan {
+        exit_code: Option<i32>,
+        output: String,
+        duration_ms: u64,
+        timed_out: bool,
+    },
 }
 
 /// Being found on the same Wi-Fi (F47).
@@ -581,5 +638,63 @@ mod tests {
         }
         let bytes = postcard::to_allocvec(&req).unwrap();
         assert_eq!(postcard::from_bytes::<Request>(&bytes).unwrap(), req);
+    }
+
+    #[test]
+    fn assistant_approvals_keep_their_numbers() {
+        let check = Request::AssistantCheck {
+            assistant: "claude".into(),
+            session: "s".into(),
+            permission_mode: "default".into(),
+            tool: "Bash".into(),
+            input: "rm -rf build".into(),
+            oversize: false,
+            folder: "/w".into(),
+        };
+        assert_eq!(tag(&check), 67, "AssistantCheck moved");
+        let ask = Request::AssistantAsk {
+            assistant: "claude".into(),
+            session: "s".into(),
+            tool: "Bash".into(),
+            input: "ls".into(),
+            folder: "/w".into(),
+        };
+        assert_eq!(tag(&ask), 68, "AssistantAsk moved");
+        let held = Response::AssistantHeld { id: 7 };
+        assert_eq!(tag(&held), 37, "AssistantHeld moved");
+        let answer = Response::AssistantAnswer(crate::assistants::Answer::Allow);
+        assert_eq!(tag(&answer), 38, "AssistantAnswer moved");
+        for msg in [check, ask] {
+            let bytes = postcard::to_allocvec(&msg).unwrap();
+            assert_eq!(postcard::from_bytes::<Request>(&bytes).unwrap(), msg);
+        }
+        let bytes = postcard::to_allocvec(&answer).unwrap();
+        assert_eq!(postcard::from_bytes::<Response>(&bytes).unwrap(), answer);
+    }
+
+    #[test]
+    fn assistant_settings_and_tool_done_keep_their_numbers() {
+        use crate::assistants::AssistantSettings;
+        assert_eq!(tag(&Request::GetAssistantSettings), 69);
+        let set = Request::SetAssistantSettings(AssistantSettings {
+            ask_on_phone: true,
+            ..Default::default()
+        });
+        assert_eq!(tag(&set), 70, "SetAssistantSettings moved");
+        let reply = Response::AssistantSettings(AssistantSettings::default());
+        assert_eq!(tag(&reply), 39, "AssistantSettings moved");
+        let done = AssistantEventKind::ToolDone {
+            input_hash: [7; 32],
+        };
+        assert_eq!(tag(&done), 5, "ToolDone moved");
+        let ev = Request::AssistantEvent {
+            assistant: "claude".into(),
+            session: "s".into(),
+            event: done,
+        };
+        let bytes = postcard::to_allocvec(&ev).unwrap();
+        assert_eq!(postcard::from_bytes::<Request>(&bytes).unwrap(), ev);
+        let bytes = postcard::to_allocvec(&set).unwrap();
+        assert_eq!(postcard::from_bytes::<Request>(&bytes).unwrap(), set);
     }
 }

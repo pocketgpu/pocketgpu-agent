@@ -1,5 +1,6 @@
 //! The long-running agent: sampler, network endpoint and local socket.
 
+pub mod assistants;
 pub mod auth;
 pub mod control;
 pub mod crash;

@@ -8,17 +8,25 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use super::Ctx;
+use super::claude_approvals as approvals;
 use super::files;
-use super::hooks;
+use super::hooks::{self, Mode};
 use super::jsonedit;
 use super::places::{Places, shell_line};
 use super::plan::{Action, Assistant, FileUndo, Part, Plan, Status, Step};
 use super::skill;
 
 const ME: Assistant = Assistant::Claude;
-/// A turn starts, Claude Code waits for the user, a turn ends, and a tool ran: the only sign
-/// that a permission question was answered at the desk, so the phone isn't pinged for it.
-const EVENTS: [&str; 4] = ["UserPromptSubmit", "Notification", "Stop", "PostToolUse"];
+/// A turn starts, Claude Code waits for the user, a turn ends, and a tool ran or failed:
+/// the only sign that a permission question was answered at the desk, so the phone isn't
+/// pinged for it, and a held "Ask on my phone" request ends as answered at the computer.
+const EVENTS: [&str; 5] = [
+    "UserPromptSubmit",
+    "Notification",
+    "Stop",
+    "PostToolUse",
+    "PostToolUseFailure",
+];
 /// Only the waits that need the user: a permission question, or idle at the prompt.
 const NOTIFICATIONS: &str = "permission_prompt|idle_prompt";
 
@@ -29,8 +37,24 @@ pub fn found(ctx: &Ctx) -> bool {
 pub fn plan(ctx: &Ctx) -> Result<Plan> {
     let mut plan = Plan::default();
     let cli = ctx.runner.find("claude");
+    let blocked = approvals::version_blocked(ctx, cli.as_deref());
+    if let Some(why) = &blocked {
+        plan.notes
+            .push(format!("Ask me first is off for Claude Code: {why}"));
+    }
+    plan.check_blocked = Some(blocked.clone());
     if plugin(ctx, cli.as_deref()) {
-        plan.present = vec![Part::Mcp, Part::Skill, Part::Hooks];
+        // The plugin brings all but the `--check` hook (see `claude_approvals`).
+        plan.present = vec![Part::Mcp, Part::Skill, Part::Hooks, Part::Approvals];
+        let check = match blocked {
+            None => approvals::check_step(ctx, None),
+            Some(_) => Ok(None),
+        };
+        match check {
+            Ok(Some(step)) => plan.steps.push(step),
+            Ok(None) => {}
+            Err(e) => plan.notes.push(format!("Ask me first left out: {e:#}")),
+        }
         return Ok(plan);
     }
     let exe = ctx.exe.to_string_lossy().into_owned();
@@ -46,6 +70,8 @@ pub fn plan(ctx: &Ctx) -> Result<Plan> {
             "--",
             &exe,
             "mcp",
+            "--assistant",
+            ME.id(),
         ]
         .map(str::to_string)
         .to_vec();
@@ -64,7 +90,7 @@ pub fn plan(ctx: &Ctx) -> Result<Plan> {
     } else {
         plan.notes.push(format!(
             "Claude Code's command line isn't on PATH. Add the tools with: \
-             claude mcp add --scope user pocketgpu -- {exe} mcp"
+             claude mcp add --scope user pocketgpu -- {exe} mcp --assistant claude"
         ));
     }
     let skills = ctx.places.claude_dir.join("skills");
@@ -72,16 +98,46 @@ pub fn plan(ctx: &Ctx) -> Result<Plan> {
         Part::Skill,
         skill::step(ME, &skills, ctx.places, ctx.manifest)?,
     );
-    match hooks_step(ctx) {
+    // All three change settings.json. Approvals go in first (they don't wait for the alerts
+    // question), each step starting from the file as the one before leaves it.
+    let ask = approvals::ask_step(ctx, None);
+    let check = match blocked {
+        None => approvals::check_step(ctx, approvals::after(&ask)),
+        Some(_) => Ok(None),
+    };
+    let last = approvals::after(&check).or_else(|| approvals::after(&ask));
+    match hooks_step(ctx, last) {
         Ok(step) => plan.add(Part::Hooks, step),
         Err(e) => plan.notes.push(format!("Alerts left out: {e:#}")),
+    }
+    match ask {
+        Ok(step) => plan.add(Part::Approvals, step),
+        Err(e) => plan
+            .notes
+            .push(format!("Answering on the phone left out: {e:#}")),
+    }
+    match check {
+        Ok(Some(step)) => plan.steps.push(step),
+        Ok(None) => {}
+        Err(e) => plan.notes.push(format!("Ask me first left out: {e:#}")),
     }
     Ok(plan)
 }
 
 pub fn status(ctx: &Ctx) -> Result<Status> {
-    let plugin = plugin(ctx, ctx.runner.find("claude").as_deref());
+    let cli = ctx.runner.find("claude");
+    let plugin = plugin(ctx, cli.as_deref());
     let settings = files::read(&settings(ctx.places))?.unwrap_or_default();
+    // The plugin brings the `--check` hook whatever the version, so check it here; without
+    // the plugin, connect wrote the hook only for a new enough Claude Code.
+    let blocked = if plugin {
+        approvals::version_blocked(ctx, cli.as_deref())
+    } else {
+        ctx.manifest.check_blocked.get(ME.id()).cloned()
+    };
+    let has = |event: &str, mode: Mode| {
+        hooks::missing_as(&settings, &[event], ME.id(), mode).is_ok_and(|m| m.is_empty())
+    };
     Ok(Status {
         assistant: ME,
         found: found(ctx),
@@ -89,10 +145,13 @@ pub fn status(ctx: &Ctx) -> Result<Status> {
         skill: plugin || skill::present(&ctx.places.claude_dir.join("skills")),
         hooks: plugin || hooks::missing(&settings, &EVENTS, ME.id()).is_ok_and(|m| m.is_empty()),
         plugin,
+        ask: plugin || has(approvals::ASK_EVENT, Mode::Ask),
+        check: blocked.is_none() && has(approvals::CHECK_EVENT, Mode::Check),
+        check_blocked: blocked,
     })
 }
 
-fn settings(places: &Places) -> PathBuf {
+pub(super) fn settings(places: &Places) -> PathBuf {
     places.claude_dir.join("settings.json")
 }
 
@@ -131,9 +190,13 @@ fn plugin(ctx: &Ctx, cli: Option<&Path>) -> bool {
     })
 }
 
-fn hooks_step(ctx: &Ctx) -> Result<Option<Step>> {
+/// `base`: the file as an earlier step of this run leaves it, else as it is now.
+fn hooks_step(ctx: &Ctx, base: Option<String>) -> Result<Option<Step>> {
     let path = settings(ctx.places);
-    let before = files::read(&path)?;
+    let before = match base {
+        Some(text) => Some(text),
+        None => files::read(&path)?,
+    };
     let text = before.clone().unwrap_or_default();
     let missing = hooks::missing(&text, &EVENTS, ME.id())
         .with_context(|| format!("{} isn't valid JSON", ctx.places.show(&path)))?;
@@ -195,16 +258,48 @@ mod tests {
         for copy in copies {
             let hooks = copy["hooks"].as_object().unwrap();
             let mut events: Vec<&str> = hooks.keys().map(String::as_str).collect();
+            // Never `--check`: it blocks when it fails, so only `connect` writes it.
             let mut want = EVENTS.to_vec();
+            want.push(approvals::ASK_EVENT);
             events.sort_unstable();
             want.sort_unstable();
             assert_eq!(events, want);
             assert_eq!(hooks["Notification"][0]["matcher"], NOTIFICATIONS);
             for (event, groups) in hooks {
                 let hook = &groups[0]["hooks"][0];
-                assert_eq!(hook["command"], "pgpu hook claude", "{event}");
-                assert_eq!(hook["async"], true, "{event}");
+                // The same entries connect writes, with `pgpu` for the program.
+                let mode = if event == approvals::ASK_EVENT {
+                    Mode::Ask
+                } else {
+                    Mode::Plain
+                };
+                let mut want = approvals::hook(Path::new("pgpu"), mode);
+                if mode == Mode::Plain {
+                    want = hook_line("pgpu hook claude");
+                } else {
+                    want["command"] = json!("pgpu hook claude --ask");
+                    if let Some(m) = want.as_object_mut() {
+                        m.remove("args");
+                    }
+                }
+                assert_eq!(hook, &want, "{event}");
             }
+            assert!(hooks[approvals::ASK_EVENT][0].get("matcher").is_none());
         }
+    }
+
+    /// Claude Code's shell tools reach `--check`, so "Ask me first" sees PowerShell's
+    /// deletes on Windows too.
+    #[test]
+    fn the_check_matches_every_shell_tool() {
+        let tools: Vec<&str> = approvals::CHECK_MATCHER.split('|').collect();
+        for tool in ["Bash", "PowerShell"] {
+            assert!(tools.contains(&tool), "{tool}");
+            assert!(crate::assistants::kinds::is_shell_tool(tool));
+        }
+    }
+
+    fn hook_line(line: &str) -> Value {
+        json!({ "type": "command", "command": line, "async": true })
     }
 }

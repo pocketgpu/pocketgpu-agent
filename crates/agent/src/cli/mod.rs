@@ -19,11 +19,14 @@ pub mod docker;
 pub mod doctor;
 pub mod files;
 pub mod hook;
+mod hook_answer;
+mod hook_check;
 mod hook_scan;
 pub mod inbox;
 pub mod jobs;
 pub mod lan;
 pub mod mcp;
+mod mcp_tools;
 pub mod notices;
 pub mod notify;
 mod pair;
@@ -129,9 +132,14 @@ pub enum Command {
     },
     /// An MCP server on stdin and stdout for AI agents on this machine (Claude Code, Codex,
     /// Gemini CLI): GPU status, jobs and their output, and notes to your phone.
-    Mcp,
-    /// AI assistants here (Claude Code, Codex, Cursor) and your phone: list (the default),
-    /// connect or disconnect.
+    Mcp {
+        /// Which assistant starts it (claude, codex, cursor, gemini): tools beyond reading
+        /// need that assistant's level (pgpu assistants set <id> control).
+        #[arg(long)]
+        assistant: Option<String>,
+    },
+    /// AI assistants here (Claude Code, Codex, Cursor, Gemini CLI) and your phone: list (the
+    /// default), connect or disconnect.
     Assistants {
         #[command(subcommand)]
         action: Option<AssistantsCmd>,
@@ -237,7 +245,7 @@ pub enum Command {
     },
 }
 
-/// `pgpu assistants`: set up Claude Code, Codex and Cursor to use PocketGPU (F32).
+/// `pgpu assistants`: set up Claude Code, Codex, Cursor and Gemini CLI to use PocketGPU (F32).
 #[derive(Debug, Clone, Subcommand)]
 pub enum AssistantsCmd {
     /// What is connected now (the default).
@@ -257,6 +265,12 @@ pub enum AssistantsCmd {
         /// Don't ask.
         #[arg(long)]
         yes: bool,
+    },
+    /// Change how AI assistants ask your phone: ask-on-phone, ask-first, words; or what one
+    /// may do through PocketGPU's tools: <assistant> view|control|shell.
+    Set {
+        #[command(subcommand)]
+        what: assistants::set::What,
     },
 }
 
@@ -363,7 +377,10 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Screen { action } => screen::run(&paths, cli.json, action.clone()).await,
         Command::Clip { action } => clip::run(&paths, cli.json, *action).await,
         Command::Notify { action } => notify::run(&paths, cli.json, action.clone()).await,
-        Command::Mcp => mcp::run(&paths).await,
+        Command::Mcp { assistant } => mcp::run(&paths, assistant.clone()).await,
+        Command::Assistants {
+            action: Some(AssistantsCmd::Set { what }),
+        } => assistants::set::run(&paths, cli.json, what.clone()).await,
         Command::Assistants { action } => assistants::run(
             &paths,
             cli.json,

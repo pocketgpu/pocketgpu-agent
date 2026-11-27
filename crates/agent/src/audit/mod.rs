@@ -80,6 +80,16 @@ pub enum Event {
     /// Share a model (F48): `made`, `stopped`, `claimed` or `ended`; the target is the
     /// share's model and id. Never what a guest asked.
     Share,
+    /// A held AI assistant action ended (F32), written once at the end by
+    /// [`record_assistant_request`] so the answering device is right. The target is
+    /// `<assistant> · <session, 8 chars> · <kind> · <summary>`, secrets masked.
+    AssistantRequest,
+    /// `pgpu mcp`'s note to the phone: the target is the assistant, the result `sent to N`.
+    AssistantNote,
+    /// `[assistants]` changed, from a phone or `pgpu assistants set`: `old -> new`.
+    AssistantSettings,
+    /// An assistant's MCP call needed a higher level: the target `<assistant> · <tool>`.
+    AssistantRefused,
 }
 
 impl Event {
@@ -122,6 +132,10 @@ impl Event {
             Self::ScreenAccess => "screen_access",
             Self::LanAccess => "lan_access",
             Self::Share => "share",
+            Self::AssistantRequest => "assistant_request",
+            Self::AssistantNote => "assistant_note",
+            Self::AssistantSettings => "assistant_settings",
+            Self::AssistantRefused => "assistant_refused",
         }
     }
 }
@@ -155,6 +169,34 @@ pub fn record(
     )?;
     crate::notices::observe(db, device, event, target, result);
     Ok(())
+}
+
+/// The end of a held AI assistant action (F32): `answered_by` is the phone that allowed or
+/// denied it, `None` for the computer itself (the desk, the clock, no phone, the hook gone).
+/// `target` is already masked ([`crate::assistants::secrets`]).
+pub fn record_assistant_request(
+    db: &Connection,
+    answered_by: Option<&str>,
+    target: &str,
+    state: pocketgpu_proto::assistants::ApprovalState,
+) -> Result<()> {
+    use pocketgpu_proto::assistants::ApprovalState as S;
+    let result = match state {
+        S::Waiting => "waiting",
+        S::Allowed => "allowed",
+        S::Denied => "denied",
+        S::AnsweredAtComputer => "answered_at_computer",
+        S::NoPhone => "no_phone",
+        S::TimedOut => "timed_out",
+        S::NoLongerNeeded => "no_longer_needed",
+    };
+    record(
+        db,
+        answered_by.unwrap_or("local"),
+        Event::AssistantRequest,
+        target,
+        result,
+    )
 }
 
 /// The result of an entry written as a transfer starts (see [`Event::FileGet`]).
@@ -223,11 +265,37 @@ pub fn since(db: &Connection, since_ms: i64) -> Result<Vec<Entry>> {
 /// Entries with phone names instead of keys, for `pgpu audit`. Phones that were removed
 /// since show the start of their key.
 pub fn named(db: &Connection, since_ms: i64) -> Result<Vec<pocketgpu_proto::local::AuditEntry>> {
-    let mut stmt = db.prepare(
+    named_where(db, since_ms, "", u32::MAX)
+}
+
+/// The most AI assistant entries a phone gets at once.
+pub const ASSISTANT_MAX: u32 = 200;
+
+/// Only the `assistant_*` entries, newest first and at most [`ASSISTANT_MAX`], named like
+/// [`named`]: what a Full control phone reads on the AI assistants screen (F32).
+pub fn assistant_activity(
+    db: &Connection,
+    since_ms: i64,
+) -> Result<Vec<pocketgpu_proto::local::AuditEntry>> {
+    named_where(
+        db,
+        since_ms,
+        "AND a.event LIKE 'assistant\\_%' ESCAPE '\\'",
+        ASSISTANT_MAX,
+    )
+}
+
+fn named_where(
+    db: &Connection,
+    since_ms: i64,
+    and: &str,
+    limit: u32,
+) -> Result<Vec<pocketgpu_proto::local::AuditEntry>> {
+    let mut stmt = db.prepare(&format!(
         "SELECT a.at, a.device_id, d.name, a.event, a.target, a.result
          FROM audit a LEFT JOIN devices d ON d.device_id = a.device_id
-         WHERE a.at >= ?1 ORDER BY a.at DESC, a.audit_id DESC",
-    )?;
+         WHERE a.at >= ?1 {and} ORDER BY a.at DESC, a.audit_id DESC LIMIT {limit}"
+    ))?;
     let rows = stmt.query_map([since_ms], |r| {
         let key: String = r.get(1)?;
         let name: Option<String> = r.get(2)?;
@@ -279,5 +347,52 @@ mod tests {
         let entries = since(&db, 0).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].event, "refused");
+    }
+
+    #[test]
+    fn assistant_activity_is_only_assistant_entries_capped() {
+        let db = crate::store::db::open_in_memory().unwrap();
+        record(&db, "local", Event::Refused, "KillProcess 1", "no").unwrap();
+        // `_` is a LIKE wildcard: an event such as "assistantX" must not match.
+        db.execute(
+            "INSERT INTO audit (at, device_id, event, target, result) VALUES (1, 'local', 'assistantx', '', '')",
+            [],
+        )
+        .unwrap();
+        for i in 0..ASSISTANT_MAX + 5 {
+            record(&db, "local", Event::AssistantNote, &format!("n{i}"), "sent").unwrap();
+        }
+        let got = assistant_activity(&db, 0).unwrap();
+        assert_eq!(got.len(), ASSISTANT_MAX as usize);
+        assert!(got.iter().all(|e| e.event == "assistant_note"));
+        assert_eq!(got[0].device, "local");
+        assert_eq!(named(&db, 0).unwrap().len(), ASSISTANT_MAX as usize + 7);
+    }
+
+    #[test]
+    fn assistant_requests_name_who_answered() {
+        use pocketgpu_proto::assistants::ApprovalState;
+        let db = crate::store::db::open_in_memory().unwrap();
+        record_assistant_request(
+            &db,
+            Some("abcd"),
+            "claude · s1 · delete · rm x",
+            ApprovalState::Allowed,
+        )
+        .unwrap();
+        record_assistant_request(
+            &db,
+            None,
+            "claude · s1 · delete · rm y",
+            ApprovalState::TimedOut,
+        )
+        .unwrap();
+        let entries = since(&db, 0).unwrap();
+        let got: Vec<_> = entries
+            .iter()
+            .map(|e| (e.device.as_str(), e.event.as_str(), e.result.as_str()))
+            .collect();
+        assert!(got.contains(&("abcd", "assistant_request", "allowed")));
+        assert!(got.contains(&("local", "assistant_request", "timed_out")));
     }
 }

@@ -233,6 +233,7 @@ fn kind_name(kind: AlertKind) -> &'static str {
         AlertKind::IdleGpu => "idle_gpu",
         AlertKind::GuestStarted => "guest_started",
         AlertKind::Assistant => "assistant",
+        AlertKind::Approval => "approval",
     }
 }
 

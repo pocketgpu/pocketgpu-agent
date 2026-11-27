@@ -16,16 +16,24 @@ pub enum Assistant {
     Claude,
     Codex,
     Cursor,
+    /// Alerts only (F32): no approval hooks yet.
+    Gemini,
 }
 
 impl Assistant {
-    pub const ALL: [Assistant; 3] = [Assistant::Claude, Assistant::Codex, Assistant::Cursor];
+    pub const ALL: [Assistant; 4] = [
+        Assistant::Claude,
+        Assistant::Codex,
+        Assistant::Cursor,
+        Assistant::Gemini,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Assistant::Claude => "Claude Code",
             Assistant::Codex => "Codex",
             Assistant::Cursor => "Cursor",
+            Assistant::Gemini => "Gemini CLI",
         }
     }
 
@@ -35,11 +43,12 @@ impl Assistant {
             Assistant::Claude => "claude",
             Assistant::Codex => "codex",
             Assistant::Cursor => "cursor",
+            Assistant::Gemini => "gemini",
         }
     }
 }
 
-/// The three things connect sets up for an assistant.
+/// The things connect sets up for an assistant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Part {
@@ -49,6 +58,9 @@ pub enum Part {
     Skill,
     /// The hooks that ping the phone; added only after the user says yes.
     Hooks,
+    /// The hooks that let the phone answer (F32): `--ask`. They do nothing until "Ask on my
+    /// phone" is on, and have their own undo record.
+    Approvals,
 }
 
 /// What connect would do for one assistant.
@@ -59,6 +71,9 @@ pub struct Plan {
     pub present: Vec<Part>,
     /// For the user: a step to take by hand, or why something is skipped.
     pub notes: Vec<String>,
+    /// Checked for this assistant (F32): why "Ask me first" can't work for it, or `None`
+    /// when it can. Recorded in the manifest for the agent.
+    pub check_blocked: Option<Option<String>>,
 }
 
 impl Plan {
@@ -80,6 +95,13 @@ pub struct Status {
     pub hooks: bool,
     /// Claude Code: the PocketGPU plugin brings all three.
     pub plugin: bool,
+    /// Its `--ask` hook is in place: the phone can answer what it would ask at the desk.
+    pub ask: bool,
+    /// Its `--check` hook is in place ("Ask me first").
+    pub check: bool,
+    /// Why "Ask me first" can't work for it here, such as Claude Code being too old.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_blocked: Option<String>,
 }
 
 #[derive(Debug, Clone)]

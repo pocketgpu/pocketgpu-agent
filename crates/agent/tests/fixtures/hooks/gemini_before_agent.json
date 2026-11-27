@@ -1,0 +1,8 @@
+{
+  "session_id": "7f3c2a10-5e4b-4c1d-9a8e-0b1c2d3e4f50",
+  "transcript_path": "/home/me/.gemini/tmp/abc/chats/session.json",
+  "cwd": "/home/me/project",
+  "hook_event_name": "BeforeAgent",
+  "timestamp": "2026-11-26T10:00:00.000Z",
+  "prompt": "Train the model on the new data"
+}

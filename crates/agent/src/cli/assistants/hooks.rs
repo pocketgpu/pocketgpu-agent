@@ -1,42 +1,72 @@
 //! Hook lists in an assistant's JSON settings: `{"hooks": {"<Event>": [...]}}` in Claude
-//! Code, Codex and Cursor alike. Claude Code and Codex put each hook in a group
-//! (`{"hooks": [hook]}`), Cursor lists hooks directly.
+//! Code, Codex, Cursor and Gemini CLI alike. Claude Code, Codex and Gemini CLI put each hook
+//! in a group (`{"hooks": [hook]}`), Cursor lists hooks directly.
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::jsonedit;
+pub use crate::cli::hook::Mode;
 
-/// Whether a hook runs `pgpu hook <id>`, ours or written by hand.
+/// Whether a hook runs week 1's `pgpu hook <id>` (alerts), ours or written by hand.
+#[cfg(test)]
 pub fn is_ours(hook: &Value, id: &str) -> bool {
-    let mut line = hook
+    is_ours_as(hook, id, Mode::Plain)
+}
+
+/// Whether a hook runs `pgpu hook <id>` in this mode: plain, `--ask` or `--check` (F32).
+pub fn is_ours_as(hook: &Value, id: &str, mode: Mode) -> bool {
+    let mut words: Vec<&str> = hook
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or("")
-        .to_string();
+        .split_whitespace()
+        .collect();
     for arg in hook
         .get("args")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
-        line.push(' ');
-        line.push_str(arg.as_str().unwrap_or(""));
+        words.push(arg.as_str().unwrap_or(""));
     }
-    line.contains(&format!("hook {id}")) && (line.contains("pocketgpu") || line.contains("pgpu"))
+    let line = words.join(" ");
+    if !(line.contains("pocketgpu") || line.contains("pgpu")) {
+        return false;
+    }
+    let Some(at) = words.windows(2).position(|w| w == ["hook", id]) else {
+        return false;
+    };
+    let rest = &words[at + 2..];
+    let has = |flag: &str| rest.contains(&flag);
+    match mode {
+        Mode::Plain => !has("--ask") && !has("--check"),
+        Mode::Ask => has("--ask"),
+        Mode::Check => has("--check"),
+    }
 }
 
 /// The events in `events` that have no hook of ours yet.
 pub fn missing<'a>(text: &str, events: &[&'a str], id: &str) -> Result<Vec<&'a str>> {
+    missing_as(text, events, id, Mode::Plain)
+}
+
+/// The events in `events` that have no hook of ours in this mode yet.
+pub fn missing_as<'a>(
+    text: &str,
+    events: &[&'a str],
+    id: &str,
+    mode: Mode,
+) -> Result<Vec<&'a str>> {
     let mut out = Vec::new();
     for &event in events {
         let list = jsonedit::get(text, &["hooks", event])?.unwrap_or(Value::Null);
         let has = list.as_array().into_iter().flatten().any(|item| {
-            is_ours(item, id)
+            is_ours_as(item, id, mode)
                 || item
                     .get("hooks")
                     .and_then(Value::as_array)
-                    .is_some_and(|hs| hs.iter().any(|h| is_ours(h, id)))
+                    .is_some_and(|hs| hs.iter().any(|h| is_ours_as(h, id, mode)))
         });
         if !has {
             out.push(event);
@@ -96,6 +126,30 @@ mod tests {
             &json!({ "command": "notify-send hook claude" }),
             "claude"
         ));
+    }
+
+    #[test]
+    fn each_mode_is_its_own_hook() {
+        let plain = json!({ "command": "'/my bin/pocketgpu' hook claude" });
+        let ask = json!({ "command": "'/my bin/pocketgpu' hook claude --ask", "timeout": 330 });
+        let check = json!({ "command": "C:\\PocketGPU\\pocketgpu.exe", "args": ["hook", "claude", "--check"] });
+        assert!(is_ours(&plain, "claude"));
+        assert!(!is_ours(&ask, "claude") && !is_ours(&check, "claude"));
+        assert!(is_ours_as(&ask, "claude", Mode::Ask));
+        assert!(!is_ours_as(&plain, "claude", Mode::Ask));
+        assert!(!is_ours_as(&check, "claude", Mode::Ask));
+        assert!(is_ours_as(&check, "claude", Mode::Check));
+        assert!(!is_ours_as(&ask, "claude", Mode::Check));
+        assert!(!is_ours_as(&ask, "claudex", Mode::Ask));
+        assert!(!is_ours_as(&ask, "codex", Mode::Ask));
+        let text = r#"{"hooks": {"PermissionRequest": [{"hooks": [{"command": "pgpu hook claude --ask"}]}]}}"#;
+        let events = ["PermissionRequest"];
+        assert!(
+            missing_as(text, &events, "claude", Mode::Ask)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(missing(text, &events, "claude").unwrap(), events);
     }
 
     #[test]

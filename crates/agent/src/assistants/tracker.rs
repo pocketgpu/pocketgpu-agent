@@ -82,7 +82,7 @@ impl Tracker {
                 Decision::Nothing
             }
             // Only a sign of life: the new mark is enough to drop a waiting "needs you".
-            Event::Working => Decision::Nothing,
+            Event::Working | Event::ToolDone { .. } => Decision::Nothing,
             Event::NeedsYou => Decision::Wait { mark },
             Event::Idle if s.finished_sent => Decision::Nothing,
             // Claude Code says it is idle a minute after every answer the user hasn't replied
@@ -135,6 +135,12 @@ impl Tracker {
     /// session share one count ([`super::limits::NOTES_PER_HOUR`]).
     pub fn allow_note(&mut self, now: i64) -> bool {
         self.limits.allow_note(now)
+    }
+
+    /// Whether an approval push for this assistant may go out now; counts it if so. Shares
+    /// the hourly limits with the alerts above.
+    pub fn allow_push(&mut self, assistant: &str, now: i64) -> bool {
+        self.limits.allow(assistant, now)
     }
 
     fn forget_old(&mut self, now: i64) {

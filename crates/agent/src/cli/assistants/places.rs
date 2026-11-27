@@ -17,6 +17,8 @@ pub struct Places {
     /// `$CODEX_HOME` or `~/.codex`.
     pub codex_home: PathBuf,
     pub cursor_dir: PathBuf,
+    /// `~/.gemini`: Gemini CLI's settings.json and GEMINI.md.
+    pub gemini_dir: PathBuf,
     /// `~/.agents`: skills that several assistants read (Codex, Cursor).
     pub agents_dir: PathBuf,
     /// The agent's data folder: what connect changed, and backups.
@@ -31,6 +33,7 @@ impl Places {
             claude_json: home.join(".claude.json"),
             codex_home: home.join(".codex"),
             cursor_dir: home.join(".cursor"),
+            gemini_dir: home.join(".gemini"),
             agents_dir: home.join(".agents"),
             data_dir: data_dir.to_path_buf(),
         }
@@ -54,7 +57,7 @@ impl Places {
     }
 
     pub fn manifest(&self) -> PathBuf {
-        self.data_dir.join("assistants").join("changes.json")
+        crate::assistants::blocked::manifest_path(&self.data_dir)
     }
 
     pub fn backups(&self) -> PathBuf {

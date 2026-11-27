@@ -48,19 +48,29 @@ pub fn connect(
     out: &mut dyn Write,
 ) -> Result<Report> {
     let plans = super::plans(ctx)?;
+    // Whether "Ask me first" can work for each, for the agent (F32), even when nothing else
+    // changes.
+    if !opts.dry_run {
+        for (a, plan) in &plans {
+            if let Some(why) = &plan.check_blocked {
+                Manifest::record_blocked(ctx.places, a.id(), why.clone())?;
+            }
+        }
+    }
     let mut report = Report {
         found: plans.iter().map(|(a, _)| *a).collect(),
         dry_run: opts.dry_run,
         ..Report::default()
     };
-    // Each change once: Codex and Cursor share the skill in ~/.agents.
+    // Each change once: Codex and Cursor share the skill in ~/.agents. Different changes
+    // to one file (Claude Code's approvals and alerts) each stay.
     let mut paths = HashSet::new();
     let mut steps: Vec<Step> = Vec::new();
     for (_, plan) in &plans {
         report.notes.extend(plan.notes.iter().cloned());
         for step in &plan.steps {
-            if let Action::Write { path, .. } = &step.action
-                && !paths.insert(path.clone())
+            if let Action::Write { path, after, .. } = &step.action
+                && !paths.insert((path.clone(), after.clone()))
             {
                 continue;
             }
@@ -72,7 +82,7 @@ pub fn connect(
     let mut text = String::new();
     if plans.is_empty() {
         text.push_str(&format!(
-            "No AI assistants found here (Claude Code, Codex or Cursor).\nFor others, see {DOCS}\n"
+            "No AI assistants found here (Claude Code, Codex, Cursor or Gemini CLI).\nFor others, see {DOCS}\n"
         ));
     } else {
         text.push_str(&describe(&report.found, &main, &alerts, &report.notes));
@@ -180,6 +190,10 @@ pub fn disconnect(
         });
     }
     kept.reverse();
+    if kept.is_empty() {
+        // Nothing of ours is left for "Ask me first" to need.
+        manifest.check_blocked.clear();
+    }
     manifest.changes = kept;
     manifest.save(ctx.places)?;
     let mut text = String::new();
@@ -199,7 +213,7 @@ fn mcp_still_there(ctx: &Ctx, assistant: Assistant) -> bool {
     match assistant {
         Assistant::Claude => claude::mcp_present(ctx.places),
         Assistant::Codex => codex::mcp_present(ctx.places),
-        Assistant::Cursor => true,
+        Assistant::Cursor | Assistant::Gemini => true,
     }
 }
 
@@ -228,14 +242,16 @@ fn describe(found: &[Assistant], main: &[Step], alerts: &[Step], notes: &[String
             if mine.is_empty() {
                 continue;
             }
-            let what = match (
-                mine.iter().any(|s| s.part == Part::Mcp),
-                mine.iter().any(|s| s.part == Part::Skill),
-            ) {
-                (true, true) => "PocketGPU's tools and skill",
-                (true, false) => "PocketGPU's tools",
-                _ => "PocketGPU's skill",
-            };
+            let parts: Vec<&str> = [
+                (Part::Mcp, "tools"),
+                (Part::Skill, "skill"),
+                (Part::Approvals, "answers from your phone"),
+            ]
+            .into_iter()
+            .filter(|(p, _)| mine.iter().any(|s| s.part == *p))
+            .map(|(_, word)| word)
+            .collect();
+            let what = format!("PocketGPU's {}", and_list(&parts));
             text.push_str(&format!("  {:<12} {what}\n", a.name()));
             for s in mine {
                 text.push_str(&format!("               {}{}\n", s.detail, backup_note(s)));
@@ -278,15 +294,19 @@ fn results(report: &Report) -> String {
             .iter()
             .filter(|c| c.assistant == *a)
             .collect();
-        let done: Vec<&str> = mine
-            .iter()
-            .filter(|c| c.ok)
-            .map(|c| match c.part {
+        let mut done: Vec<&str> = Vec::new();
+        for c in mine.iter().filter(|c| c.ok) {
+            let word = match c.part {
                 Part::Mcp => "tools",
                 Part::Skill => "skill",
                 Part::Hooks => "alerts",
-            })
-            .collect();
+                Part::Approvals => "answers from your phone",
+            };
+            // Claude Code's approvals are two steps (--ask and --check): one word.
+            if !done.contains(&word) {
+                done.push(word);
+            }
+        }
         if !done.is_empty() {
             text.push_str(&format!("✓ {:<12} {}\n", a.name(), and_list(&done)));
         }

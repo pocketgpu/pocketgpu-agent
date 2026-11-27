@@ -1,7 +1,8 @@
 //! Sends AI assistant alerts (F32): notes from `pgpu mcp`, and "needs you" and "finished"
 //! from assistants' hooks. Free on every plan; off when the user turns AI assistant alerts
 //! off, held while alerts are paused, and only for the owner's own phones: a guest (F44)
-//! never gets them, by push or over `pgpu/events/1`.
+//! never gets them, by push or over `pgpu/events/1`. Approvals (F32) go only to the owner's
+//! Full control devices: [`super::approval`] for the push, [`event`] for open apps.
 
 use anyhow::Result;
 use pocketgpu_proto::push::{AlertKind, AlertRequest, AlertResult};
@@ -14,9 +15,37 @@ pub const NOTE: &str = "note";
 /// The kind they see for an alert from an assistant's hook.
 pub const ASSISTANT: &str = "assistant";
 
+/// An approval push (F32): owner Full control devices only.
+pub const APPROVAL: &str = "approval";
+/// Live updates for open apps about held actions and their settings (F32); the request id
+/// rides in the alert's `job` field, since `events::Alert` has no link.
+pub const APPROVAL_OPENED: &str = "approval_opened";
+pub const APPROVAL_ENDED: &str = "approval_ended";
+pub const SETTINGS: &str = "assistant_settings";
+
 /// Kinds a guest's open app never hears over `pgpu/events/1`.
 pub fn owner_only(kind: &str) -> bool {
-    matches!(kind, NOTE | ASSISTANT)
+    matches!(kind, NOTE | ASSISTANT) || shell_only(kind)
+}
+
+/// Kinds only the owner's Full control devices hear: what an assistant waits for is as much
+/// as a terminal.
+pub fn shell_only(kind: &str) -> bool {
+    matches!(kind, APPROVAL | APPROVAL_OPENED | APPROVAL_ENDED | SETTINGS)
+}
+
+/// Tells open apps (not push, not alert channels) that a request opened or ended, or that
+/// the settings changed. Never the command: only the assistant and the computer.
+pub fn event(agent: &Agent, kind: &'static str, title: String, id: Option<u64>) {
+    debug_assert!(shell_only(kind));
+    // Nobody listening is not an error.
+    let _ = agent.events.send(pocketgpu_proto::msg::events::Alert {
+        title,
+        body: String::new(),
+        kind: kind.to_string(),
+        job: id,
+        at_ms: crate::store::db::now_ms() as u64,
+    });
 }
 
 /// How a send went: phones the push server delivered to, channels that took it, and
@@ -135,5 +164,9 @@ mod tests {
     fn notes_and_assistant_alerts_stay_with_the_owner() {
         assert!(owner_only(NOTE) && owner_only(ASSISTANT));
         assert!(!owner_only("job_end") && !owner_only("gpu_temp"));
+        for kind in [APPROVAL, APPROVAL_OPENED, APPROVAL_ENDED, SETTINGS] {
+            assert!(owner_only(kind) && shell_only(kind), "{kind}");
+        }
+        assert!(!shell_only(NOTE) && !shell_only(ASSISTANT));
     }
 }

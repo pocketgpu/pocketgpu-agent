@@ -1,5 +1,5 @@
-//! `pgpu hook` mapping, with inputs as Claude Code, Codex and Cursor send them (their docs'
-//! own examples, in `tests/fixtures/hooks`).
+//! `pgpu hook` mapping, with inputs as Claude Code, Codex, Cursor and Gemini CLI send them
+//! (their docs' own examples, in `tests/fixtures/hooks`).
 
 use super::*;
 
@@ -31,8 +31,20 @@ fn claude_code_events() {
         seen("abc123", Event::Idle)
     );
     assert_eq!(parse(fixture!("claude_notification_auth")), None);
+    // A finished or failed tool call carries the hash of that call, nothing it wrote.
+    let done = |input: &str| {
+        let call = hook_answer::tool_call(input).unwrap();
+        Event::ToolDone {
+            input_hash: call.hash(),
+        }
+    };
+    let post = fixture!("claude_post_tool_use");
+    assert_eq!(parse(post), seen("abc123", done(post)));
+    let failed = fixture!("claude_post_tool_use_failure");
+    assert_eq!(parse(failed), seen("abc123", done(failed)));
+    // Without a tool it's still a sign of life.
     assert_eq!(
-        parse(fixture!("claude_post_tool_use")),
+        parse(r#"{"hook_event_name":"PostToolUse","session_id":"abc123"}"#),
         seen("abc123", Event::Working)
     );
     assert_eq!(
@@ -73,6 +85,28 @@ fn cursor_events() {
         seen(session, Event::TurnEnded)
     );
     assert_eq!(parse(fixture!("cursor_stop_aborted")), None);
+}
+
+#[test]
+fn gemini_cli_events() {
+    let session = "7f3c2a10-5e4b-4c1d-9a8e-0b1c2d3e4f50";
+    assert_eq!(
+        parse(fixture!("gemini_before_agent")),
+        seen(session, Event::TurnStarted)
+    );
+    assert_eq!(
+        parse(fixture!("gemini_notification_permission")),
+        seen(session, Event::NeedsYou)
+    );
+    // A tool ran: only a sign of life, never the tool call's text or its hash.
+    assert_eq!(
+        parse(fixture!("gemini_after_tool")),
+        seen(session, Event::Working)
+    );
+    assert_eq!(
+        parse(fixture!("gemini_after_agent")),
+        seen(session, Event::TurnEnded)
+    );
 }
 
 #[test]
@@ -148,4 +182,112 @@ fn only_a_json_last_argument_is_taken() {
     );
     let huge: OsString = format!("{{{}}}", " ".repeat(MAX_INPUT)).into();
     assert_eq!(json_arg(&[huge]), None);
+}
+
+mod ask {
+    use super::*;
+    use crate::assistants::answers::input_hash;
+    use pocketgpu_proto::assistants::{Answer, Ended};
+    use pocketgpu_proto::local::Response;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn modes_come_from_the_flags() {
+        assert_eq!(mode(&[]), Mode::Plain);
+        assert_eq!(mode(&["--ask".into()]), Mode::Ask);
+        assert_eq!(mode(&["--check".into()]), Mode::Check);
+        assert_eq!(mode(&[r#"{"type":"t"}"#.into()]), Mode::Plain);
+    }
+
+    #[test]
+    fn the_permission_request_is_read_whole() {
+        let call = hook_answer::tool_call(fixture!("claude_permission_request")).unwrap();
+        assert_eq!(call.event, "PermissionRequest");
+        assert_eq!(call.session, "abc123");
+        assert_eq!(call.permission_mode, "default");
+        assert_eq!(call.tool, "Bash");
+        assert_eq!(call.folder, "/Users/.../my-project");
+        let input: Value = serde_json::from_str(&call.input).unwrap();
+        assert_eq!(input["command"], "rm -rf node_modules");
+        // The agent hashes what the hook sends; the finished call hashes the same.
+        assert_eq!(call.hash(), input_hash("Bash", &call.input));
+        let failed = hook_answer::tool_call(fixture!("claude_post_tool_use_failure")).unwrap();
+        assert_eq!(failed.hash(), call.hash());
+        let other = hook_answer::tool_call(fixture!("claude_post_tool_use")).unwrap();
+        assert_ne!(other.hash(), call.hash());
+        for bad in [
+            "",
+            "not json",
+            "[]",
+            r#"{"hook_event_name":"PermissionRequest"}"#,
+        ] {
+            assert_eq!(hook_answer::tool_call(bad), None, "{bad:?}");
+        }
+    }
+
+    fn printed(answer: Answer) -> Option<Value> {
+        hook_answer::claude_permission_request(&answer).map(|line| {
+            assert!(!line.contains('\n'), "one line: {line}");
+            serde_json::from_str(&line).unwrap()
+        })
+    }
+
+    #[test]
+    fn claude_code_gets_the_phones_allow_or_deny() {
+        assert_eq!(
+            printed(Answer::Allow),
+            Some(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": { "behavior": "allow" }
+                }
+            }))
+        );
+        assert_eq!(
+            printed(Answer::Deny {
+                message: "Denied on your phone".into()
+            }),
+            Some(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": { "behavior": "deny", "message": "Denied on your phone" }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn nothing_is_printed_without_a_phone_answer() {
+        assert_eq!(printed(Answer::Pass), None);
+        for why in [
+            Ended::AnsweredAtComputer,
+            Ended::NoPhone,
+            Ended::TimedOut,
+            Ended::NoLongerNeeded,
+        ] {
+            assert_eq!(printed(Answer::NoDecision { why }), None, "{why:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_whole_answer_counts() {
+        use hook_answer::final_answer;
+        let pass = Response::AssistantAnswer(Answer::Pass);
+        let allow = Response::AssistantAnswer(Answer::Allow);
+        let held = Response::AssistantHeld { id: 7 };
+        assert_eq!(final_answer(Ok((pass, None))), Some(Answer::Pass));
+        assert_eq!(
+            final_answer(Ok((held.clone(), Some(allow.clone())))),
+            Some(Answer::Allow)
+        );
+        // An agent down, too old, stopping or confused: no answer, so nothing printed.
+        assert_eq!(final_answer(Err(anyhow::anyhow!("agent down"))), None);
+        assert_eq!(final_answer(Ok((held.clone(), None))), None);
+        assert_eq!(
+            final_answer(Ok((Response::Error("unknown request".into()), None))),
+            None
+        );
+        assert_eq!(final_answer(Ok((Response::Ok, None))), None);
+        assert_eq!(final_answer(Ok((allow, Some(held)))), None);
+    }
 }

@@ -16,3 +16,23 @@ claude plugin install pocketgpu@pocketgpu
 
 Without the plugin, `pgpu assistants connect` sets up the same for Claude Code, Codex and
 Cursor.
+
+## Answering from your phone
+
+The plugin also lets your phone answer Claude Code, once you turn it on with
+`pgpu assistants set ask-on-phone on` or `pgpu assistants set ask-first delete git-push`
+(or from the app; answering on the phone needs PocketGPU Pro):
+
+- **Ask on my phone**: when Claude Code would ask you at the computer, your phone can Allow
+  or Deny too. The first answer counts.
+- **Ask me first**: chosen kinds of action (deleting files, `git push`, stopping programs,
+  installing packages, your own words) wait for your phone even in auto mode. No answer in
+  5 minutes, and they don't run.
+
+"Ask me first" needs **Claude Code 2.1.295 or newer**: older versions let an action go ahead
+when a hook fails, so PocketGPU won't turn it on for them. It is a safety net, not a wall: an
+assistant with a terminal can get around it.
+
+The plugin brings "Ask on my phone". "Ask me first" stops an action when its hook can't run,
+so the plugin doesn't carry it: `pgpu assistants connect` adds that hook with `pgpu`'s full
+path, and `pgpu assistants disconnect` takes it away again.

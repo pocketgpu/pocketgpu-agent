@@ -10,6 +10,7 @@
 #   PGPU_NO_SERVICE=1         install only; don't start the service
 #   PGPU_REPO=owner/name      GitHub repository with the releases
 #   PGPU_DOWNLOAD_URL=url     a mirror holding the release files (used by tests)
+# To remove it: curl -fsSL https://pocketgpu.app/install | sh -s -- --uninstall
 set -eu
 
 REPO="${PGPU_REPO:-pocketgpu/pocketgpu-releases}"
@@ -181,7 +182,37 @@ user_systemd() {
     systemctl --user show-environment >/dev/null 2>&1
 }
 
+# Takes back what `pgpu assistants connect` added first: those hooks run this binary, and
+# Claude Code and Cursor stop the actions "Ask me first" checks when it is gone. Then stops the
+# agent and removes it. The data folder (pairings, settings) stays.
+uninstall() {
+    banner
+    STEPS=3
+    exe="$INSTALL_DIR/pocketgpu"
+    [ -x "$exe" ] || fail "no agent in $INSTALL_DIR; set PGPU_INSTALL_DIR to where you installed it"
+    step "Disconnecting AI assistants"
+    if "$exe" assistants disconnect --help >/dev/null 2>&1; then
+        out="$("$exe" assistants disconnect --yes 2>&1)" ||
+            fail "pgpu assistants disconnect failed, so the agent stays. Run it to see why: $out"
+        case "$out" in *"✗"*) fail "some changes are left; run pgpu assistants disconnect to see them, then this again" ;; esac
+        done_
+    else
+        done_ "none (this agent is too old to connect any)"
+    fi
+    step "Stopping the agent"
+    "$exe" service uninstall >/dev/null 2>&1 || true
+    # Started in the background (a container): it would keep running the deleted binary.
+    if [ "$(uname -s)" = Linux ]; then (stop_background) >/dev/null 2>&1 || true; fi
+    done_
+    step "Removing it"
+    rm -f "$INSTALL_DIR/pgpu" "$INSTALL_DIR/pocketgpu"
+    done_ "$INSTALL_DIR"
+    printf '\n  %s%s PocketGPU is removed.%s %sIts pairings and settings stay, for a new install.%s\n' "$GREEN" "$TICK" "$RESET" "$DIM" "$RESET"
+    printf '  %sUsed the Claude Code plugin? Remove it too: claude plugin uninstall pocketgpu%s\n\n' "$DIM" "$RESET"
+}
+
 main() {
+    case "${1:-}${PGPU_UNINSTALL:-}" in --uninstall* | 1) uninstall; return ;; esac
     banner
     step "Checking this machine"
     if [ "$(id -u)" = "0" ]; then

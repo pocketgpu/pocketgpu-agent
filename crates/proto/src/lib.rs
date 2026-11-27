@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod alpn;
 pub mod apps;
+pub mod assistants;
 pub mod clip;
 pub mod crash;
 pub mod docker;

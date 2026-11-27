@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use pocketgpu_proto::Permission;
+use pocketgpu_proto::assistants::ToolCall;
 use pocketgpu_proto::msg::jobs::{JobDetail, JobState, JobSummary};
 use serde_json::{Value, json};
 
@@ -11,6 +13,8 @@ struct Fake {
     asked: RefCell<Vec<Request>>,
     held: bool,
     log: Option<std::path::PathBuf>,
+    /// The assistant's level, checked as the agent does.
+    level: Option<Permission>,
 }
 
 impl Agent for Fake {
@@ -37,6 +41,30 @@ impl Agent for Fake {
                 channels: 1,
                 held: self.held,
             },
+            Request::AssistantTool {
+                assistant, call, ..
+            } => {
+                let level = self.level.unwrap_or(Permission::View);
+                match crate::assistants::tools::refusal(&assistant, level, &call) {
+                    Some(why) => Response::Error(why),
+                    None => match call {
+                        ToolCall::OfferFile { .. } => Response::Offered {
+                            name: "report.pdf".into(),
+                            size: 3,
+                            to: vec!["Pixel".into()],
+                            expires_ms: 0,
+                            pushed: vec![],
+                        },
+                        ToolCall::StopJob { .. } => Response::Ok,
+                        ToolCall::RunAction { .. } => Response::ActionRan {
+                            exit_code: Some(0),
+                            output: "restarted".into(),
+                            duration_ms: 1500,
+                            timed_out: false,
+                        },
+                    },
+                }
+            }
             _ => Response::Error("the agent is not running".into()),
         })
     }
@@ -109,7 +137,15 @@ async fn introduces_itself_and_its_tools() {
         .collect();
     assert_eq!(
         names,
-        ["machine_status", "list_jobs", "job_output", "notify_phone"]
+        [
+            "machine_status",
+            "list_jobs",
+            "job_output",
+            "notify_phone",
+            "offer_file",
+            "stop_job",
+            "run_action"
+        ]
     );
 }
 
@@ -211,4 +247,101 @@ async fn held_notes_say_so() {
     let (text, err) = call(&mut s, "notify_phone", json!({ "message": "done" })).await;
     assert!(!err && text.contains("paused"));
     assert!(text.contains("AI assistant alerts off"), "{text}");
+}
+
+fn as_assistant(level: Option<Permission>, id: Option<&str>) -> Server<Fake> {
+    Server::new(Fake {
+        level,
+        ..Fake::default()
+    })
+    .for_assistant(id.map(str::to_string), "/w/proj".into())
+}
+
+#[tokio::test]
+async fn view_assistants_are_refused_with_how_to_change_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("report.pdf");
+    std::fs::write(&file, "pdf").unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let mut s = as_assistant(None, Some("claude"));
+    for (name, args, need) in [
+        ("offer_file", json!({ "path": path }), "control"),
+        ("stop_job", json!({ "number": 3 }), "control"),
+        ("run_action", json!({ "name": "restart vllm" }), "shell"),
+    ] {
+        let (text, err) = call(&mut s, name, args).await;
+        assert!(err, "{name}: {text}");
+        assert!(text.contains("Claude Code has View"), "{text}");
+        assert!(
+            text.contains(&format!("pgpu assistants set claude {need}")),
+            "{text}"
+        );
+    }
+    // Every call went to the agent with the id, the folder and the session's start.
+    let asked = s.agent.asked.borrow();
+    assert_eq!(asked.len(), 3);
+    let Request::AssistantTool {
+        assistant,
+        folder,
+        call,
+        ..
+    } = &asked[0]
+    else {
+        panic!("{:?}", asked[0]);
+    };
+    assert_eq!((assistant.as_str(), folder.as_str()), ("claude", "/w/proj"));
+    assert!(
+        matches!(call, ToolCall::OfferFile { path: p } if std::path::Path::new(p).is_absolute())
+    );
+}
+
+#[tokio::test]
+async fn raised_levels_let_the_tools_work() {
+    let mut s = as_assistant(Some(Permission::Control), Some("codex"));
+    let (text, err) = call(&mut s, "stop_job", json!({ "number": 3 })).await;
+    assert!(!err && text.contains("job 3"), "{text}");
+    let (text, err) = call(&mut s, "run_action", json!({ "name": "x" })).await;
+    assert!(
+        err && text.contains("pgpu assistants set codex shell"),
+        "{text}"
+    );
+
+    let mut s = as_assistant(Some(Permission::Shell), Some("codex"));
+    let (text, err) = call(&mut s, "run_action", json!({ "name": "restart" })).await;
+    assert!(
+        !err && text.contains("restart exited with 0 after 1.5 s"),
+        "{text}"
+    );
+    assert!(text.ends_with("restarted"));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("report.pdf");
+    std::fs::write(&file, "pdf").unwrap();
+    let args = json!({ "path": file.to_string_lossy() });
+    let (text, err) = call(&mut s, "offer_file", args).await;
+    assert!(!err && text.contains("offered to Pixel"), "{text}");
+}
+
+#[tokio::test]
+async fn without_an_assistant_id_nothing_beyond_view_runs() {
+    let mut s = as_assistant(Some(Permission::Shell), None);
+    let (text, err) = call(&mut s, "stop_job", json!({ "number": 1 })).await;
+    assert!(err && text.contains("--assistant"), "{text}");
+    // View tools still work.
+    let (_, err) = call(&mut s, "list_jobs", json!({})).await;
+    assert!(!err);
+}
+
+#[tokio::test]
+async fn bad_tool_arguments_never_reach_the_agent() {
+    let mut s = as_assistant(Some(Permission::Shell), Some("claude"));
+    for (name, args) in [
+        ("offer_file", json!({})),
+        ("offer_file", json!({ "path": "/no/such/file/here" })),
+        ("stop_job", json!({ "number": "three" })),
+        ("run_action", json!({ "name": " " })),
+    ] {
+        let (_, err) = call(&mut s, name, args).await;
+        assert!(err, "{name}");
+    }
+    assert!(s.agent.asked.borrow().is_empty());
 }

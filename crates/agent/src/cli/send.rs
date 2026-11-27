@@ -41,7 +41,7 @@ pub async fn run(paths: &Paths, json: bool, file: &Path, to: Option<String>) -> 
 /// The file as the agent gets it: absolute, with links kept. The agent checks both this path
 /// and where it leads for keys and secrets; resolving links here would hide a secret behind
 /// one (`~/.kube/config` is often a link to a cluster file elsewhere).
-fn path_to_send(file: &Path) -> Result<String> {
+pub(super) fn path_to_send(file: &Path) -> Result<String> {
     let full = std::path::absolute(file)?;
     if !full.exists() {
         bail!("{} doesn't exist or can't be opened", file.display());

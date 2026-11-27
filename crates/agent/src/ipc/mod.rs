@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::daemon::state::Agent;
 
 pub mod client;
+mod hold;
 
 /// Reads frames on a task of their own, so waiting for them can be cancelled safely.
 pub fn forward_frames<R, T>(mut reader: R) -> tokio::sync::mpsc::Receiver<T>
@@ -118,6 +119,21 @@ where
                 }
                 continue;
             }
+            Request::AssistantTool {
+                assistant,
+                folder,
+                since_ms,
+                call,
+            } => {
+                let reply = crate::assistants::tools::local_request(
+                    &agent, &assistant, &folder, since_ms, call,
+                )
+                .await;
+                if write_frame(&mut w, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Request::Notify { title, body } => {
                 // Counted here, for every session together: each one runs its own `pgpu mcp`.
                 let reply = if !agent.assistants.allow_note(crate::store::db::now_ms()) {
@@ -154,6 +170,13 @@ where
                     break;
                 }
                 continue;
+            }
+            Request::AssistantCheck { .. } | Request::AssistantAsk { .. } => {
+                // A held action takes over this stream until it ends (F32).
+                if let Some(call) = hold::call(req) {
+                    hold::serve(&agent, call, r, w).await;
+                }
+                return;
             }
             Request::TestChannels => {
                 let alert = crate::alerts::channels::Alert {
@@ -365,6 +388,16 @@ pub fn handle(agent: &Arc<Agent>, req: Request) -> Response {
         Request::TestChannels => Response::Error("channel tests run on the stream handler".into()),
         Request::Notify { .. } | Request::AssistantEvent { .. } => {
             Response::Error("notes and assistant events run on the stream handler".into())
+        }
+        // Never an allow: these run on the stream handler (`hold.rs`).
+        Request::AssistantCheck { .. }
+        | Request::AssistantAsk { .. }
+        | Request::AssistantTool { .. } => {
+            Response::Error("AI assistant checks and tools run on the stream handler".into())
+        }
+        Request::GetAssistantSettings => crate::assistants::settings::local_request(agent, None),
+        Request::SetAssistantSettings(s) => {
+            crate::assistants::settings::local_request(agent, Some(s))
         }
         Request::GetDocker | Request::SetDocker { .. } => {
             Response::Error("Docker requests run on the stream handler".into())

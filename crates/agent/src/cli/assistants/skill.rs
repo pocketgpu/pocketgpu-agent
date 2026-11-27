@@ -81,7 +81,9 @@ mod tests {
         for tool in ["machine_status", "list_jobs", "job_output", "notify_phone"] {
             assert!(TEXT.contains(tool), "{tool}");
         }
-        assert!(TEXT.contains("pgpu run"));
+        for command in ["pgpu run", "pgpu send <file>", "pgpu clip put"] {
+            assert!(TEXT.contains(command), "{command}");
+        }
         assert!(TEXT.contains("Never put secrets"));
     }
 }

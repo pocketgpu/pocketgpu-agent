@@ -47,6 +47,9 @@ pub enum AlertKind {
     /// An AI assistant on the computer (F32): a note it sent, it needs you, or it finished.
     /// Free on every plan (decided 26 Nov 2026). An older push server answers 400 to it.
     Assistant,
+    /// An AI assistant waits for an answer on the phone (F32, Pro). Owner Full control
+    /// devices only; never the command, a file or a folder. No fallback to `Assistant`.
+    Approval,
 }
 
 impl AlertKind {
@@ -135,6 +138,15 @@ mod tests {
         assert_eq!(json, "\"assistant\"");
         let back: AlertKind = serde_json::from_str("\"assistant\"").unwrap();
         assert_eq!(back, AlertKind::Assistant);
+    }
+
+    #[test]
+    fn approval_alerts_need_pro() {
+        assert!(AlertKind::Approval.needs_pro());
+        let json = serde_json::to_string(&AlertKind::Approval).unwrap();
+        assert_eq!(json, "\"approval\"");
+        let back: AlertKind = serde_json::from_str("\"approval\"").unwrap();
+        assert_eq!(back, AlertKind::Approval);
     }
 
     #[test]

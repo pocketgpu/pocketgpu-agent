@@ -52,6 +52,8 @@ pub struct Config {
     /// Being found on the same Wi-Fi (F47): the record phones look for, and pairing from
     /// the Wi-Fi while `pgpu pair` runs. On unless `pgpu lan off` here.
     pub lan: bool,
+    /// Approvals from the phone for AI assistants (F32): `[assistants]`.
+    pub assistants: AssistantConfig,
 }
 
 /// A port added with `pgpu apps add` or `pgpu ai add`.
@@ -105,6 +107,7 @@ impl Default for Config {
             ai_added: Vec::new(),
             ollama_managed: false,
             lan: true,
+            assistants: AssistantConfig::default(),
         }
     }
 }
@@ -126,10 +129,18 @@ impl Default for AlertConfig {
 }
 
 impl Config {
+    /// A hand-edited `[assistants]` that isn't valid stops the load: dropping a kind the
+    /// owner asked to be held would let it through unasked.
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))
+                let cfg: Self =
+                    toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))?;
+                cfg.assistants
+                    .validate()
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("invalid [assistants] in {}", path.display()))?;
+                Ok(cfg)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
@@ -141,6 +152,8 @@ impl Config {
         write_private(path, toml::to_string_pretty(self)?.as_bytes())
     }
 }
+
+pub use super::config_assistants::{AssistantConfig, valid_assistant_id};
 
 #[cfg(test)]
 mod tests {

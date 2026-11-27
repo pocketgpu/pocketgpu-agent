@@ -6,8 +6,9 @@ use crate::types::{Error, MachineInfo, Permission, Platform, Sample};
 
 /// The proto version the app speaks, sent in `Hello` and `Status`. The agent uses it to
 /// leave out what an older app can't read.
-/// 1: the first. 2: reads `AlertKind::Assistant` (F32).
-pub const PROTO_VERSION: u16 = 2;
+/// 1: the first. 2: reads `AlertKind::Assistant` (F32). 3: knows approvals and the AI
+/// assistants screen (F32).
+pub const PROTO_VERSION: u16 = 3;
 
 pub mod pair {
     use super::*;
@@ -302,6 +303,26 @@ pub mod control {
         /// Changes how long a share lasts, its daily limit and whether it pauses for jobs
         /// (Shell); replies `Shares`. Agents before it answer with an error.
         ChangeShare(crate::share::ShareChange),
+        /// Open and recently ended approval requests (F32, Shell); replies `Approvals`.
+        /// Agents before it answer with an error.
+        ListApprovals,
+        /// Allows or denies a held action (Shell, re-checked on the agent); `opened_ms` must
+        /// match the open request. Replies `ApprovalAnswered`, or `Error` when it was already
+        /// answered or is no longer open.
+        AnswerApproval {
+            id: u64,
+            opened_ms: i64,
+            allow: bool,
+        },
+        /// The connected assistants (View), with the settings for Shell devices; replies
+        /// `Assistants`.
+        GetAssistants,
+        /// Changes the `[assistants]` settings (Shell); replies `Assistants`.
+        SetAssistantSettings(crate::assistants::AssistantSettings),
+        /// The `assistant_*` audit entries since then, at most 200 (Shell); replies `Activity`.
+        AssistantActivity {
+            since_ms: i64,
+        },
     }
 
     /// A device that joined with an invite (F44); its access ends by itself at `ends_ms`.
@@ -438,6 +459,14 @@ pub mod control {
         /// The new share, with its link's parts (F48).
         ShareMade(crate::share::ShareInfo),
         Shares(Vec<crate::share::ShareInfo>),
+        Approvals(Vec<crate::assistants::ApprovalView>),
+        ApprovalAnswered(Box<crate::assistants::ApprovalView>),
+        Assistants {
+            connected: Vec<crate::assistants::AssistantView>,
+            /// Only for Shell devices.
+            settings: Option<crate::assistants::AssistantSettings>,
+        },
+        Activity(Vec<crate::local::AuditEntry>),
     }
 
     /// The answer to `CheckUpdate`.
@@ -504,6 +533,7 @@ pub mod control {
                 | Self::CheckUpdate
                 | Self::GetPower
                 | Self::GetLanKey
+                | Self::GetAssistants
                 | Self::Unpair => Permission::View,
                 Self::ListProcesses
                 | Self::KillProcess { .. }
@@ -527,7 +557,12 @@ pub mod control {
                 | Self::CreateShare(_)
                 | Self::ListShares
                 | Self::StopShare { .. }
-                | Self::ChangeShare(_) => Permission::Shell,
+                | Self::ChangeShare(_)
+                // A held action's command, and answering it, are as much as a terminal (F32).
+                | Self::ListApprovals
+                | Self::AnswerApproval { .. }
+                | Self::SetAssistantSettings(_)
+                | Self::AssistantActivity { .. } => Permission::Shell,
             }
         }
     }

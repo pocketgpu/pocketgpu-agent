@@ -10,6 +10,7 @@
 #   $env:PGPU_NO_TRAY = '1'           don't offer the PocketGPU app (servers, scripts)
 #   $env:PGPU_REPO = 'owner/name'     GitHub repository with the releases
 #   $env:PGPU_DOWNLOAD_URL = 'url'    a mirror holding the release files
+# To remove it: $env:PGPU_UNINSTALL = '1'; irm https://pocketgpu.app/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 # Public key for the release signature (the same as RELEASE_PUBKEY in the agent), checked when
@@ -193,6 +194,54 @@ function Install-Tray($base, $tmp) {
     }
 }
 
+# Takes back what `pgpu assistants connect` added first: those hooks run pocketgpu.exe, and
+# Claude Code and Cursor stop the actions "Ask me first" checks when it is gone. Then stops the
+# agent and removes it. Its data (pairings, settings) stays.
+function Uninstall-PocketGPU {
+    Show-Banner
+    # Windows PowerShell 5.1 turns a native command's stderr into errors, which Stop would throw.
+    $ErrorActionPreference = 'Continue'
+    $script:Steps = 3
+    $dir = if ($env:PGPU_INSTALL_DIR) { $env:PGPU_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'PocketGPU\bin' }
+    $exe = Join-Path $dir 'pocketgpu.exe'
+    if (-not (Test-Path $exe)) { Fail "no agent in $dir; set `$env:PGPU_INSTALL_DIR to where you installed it" }
+
+    Start-Step 'Disconnecting AI assistants'
+    & $exe assistants disconnect --help *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $out = (& $exe assistants disconnect --yes 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) { Fail "pgpu assistants disconnect failed, so the agent stays. Run it to see why: $out" }
+        if ($out.Contains([string][char]0x2717)) { Fail 'some changes are left; run pgpu assistants disconnect to see them, then this again' }
+        Done
+    } else {
+        Done 'none (this agent is too old to connect any)'
+    }
+
+    Start-Step 'Stopping the agent'
+    & $exe service uninstall *> $null
+    Get-Process pocketgpu, pgpu -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Done
+
+    Start-Step 'Removing it'
+    foreach ($name in 'pocketgpu.exe', 'pocketgpu.old.exe', 'pgpu.exe', 'pgpu.old.exe', 'pgpu.cmd') {
+        Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir $name)
+    }
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($userPath) {
+        $kept = ($userPath -split ';') | Where-Object { $_ -and $_ -ne $dir }
+        [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+    }
+    Done $dir
+
+    Write-Host ''
+    Write-Host "  $script:Tick PocketGPU is removed." -ForegroundColor Green -NoNewline
+    Write-Host ' Its pairings and settings stay, for a new install.' -ForegroundColor DarkGray
+    Write-Host '  Used the Claude Code plugin? Remove it too: claude plugin uninstall pocketgpu' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 function Install-PocketGPU {
     Show-Banner
     $script:Repo = if ($env:PGPU_REPO) { $env:PGPU_REPO } else { 'pocketgpu/pocketgpu-releases' }
@@ -328,4 +377,4 @@ function Install-PocketGPU {
     Write-Host ''
 }
 
-Install-PocketGPU
+if ($env:PGPU_UNINSTALL) { Uninstall-PocketGPU } else { Install-PocketGPU }

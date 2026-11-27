@@ -39,6 +39,12 @@ impl PeerProtocol for Events {
                     {
                         continue;
                     }
+                    // Held actions and their settings: Full control devices only (F32).
+                    if crate::alerts::assistant::shell_only(&alert.kind)
+                        && agent.permission_of(&peer.key) != Some(Permission::Shell)
+                    {
+                        continue;
+                    }
                     if write_frame(&mut send, &alert).await.is_err() {
                         return;
                     }

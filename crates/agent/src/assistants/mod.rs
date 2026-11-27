@@ -3,7 +3,17 @@
 //! here, in the agent, so the hook lines and plugins stay thin. A push says only which
 //! assistant, which computer and how long the turn took: never anything the assistant wrote.
 
+pub mod answers;
+pub mod approvals;
+pub mod blocked;
+pub mod guard;
+pub mod hold;
+pub mod kinds;
 pub mod limits;
+pub mod secrets;
+pub mod seen;
+pub mod settings;
+pub mod tools;
 pub mod tracker;
 
 use std::sync::{Arc, Mutex};
@@ -24,6 +34,10 @@ const SESSION_MAX: usize = 128;
 #[derive(Debug, Default)]
 pub struct Assistants {
     tracker: Mutex<Tracker>,
+    /// Held actions waiting for the phone (F32 approvals).
+    pub approvals: approvals::Approvals,
+    /// When each assistant was last heard from (the AI assistants screen).
+    pub seen: seen::Seen,
 }
 
 impl Assistants {
@@ -35,6 +49,12 @@ impl Assistants {
     /// whole agent: every assistant session runs its own `pgpu mcp`.
     pub fn allow_note(&self, now: i64) -> bool {
         self.tracker().allow_note(now)
+    }
+
+    /// Whether an approval push may go out now, counting it if so (the same hourly limits
+    /// as the alerts).
+    pub fn allow_push(&self, assistant: &str, now: i64) -> bool {
+        self.tracker().allow_push(assistant, now)
     }
 }
 
@@ -51,6 +71,23 @@ pub fn event(
     };
     let key = name.to_ascii_lowercase();
     let session = clean_session(session);
+    agent
+        .assistants
+        .seen
+        .touch(&key, seen::Hook::Alerts, now_ms());
+    // The desk may have answered a held "Ask on my phone" request in this session.
+    let desk = match event {
+        AssistantEventKind::ToolDone { input_hash } => Some(approvals::Desk::ToolDone(input_hash)),
+        AssistantEventKind::TurnStarted | AssistantEventKind::TurnEnded => {
+            Some(approvals::Desk::TurnOver)
+        }
+        AssistantEventKind::NeedsYou | AssistantEventKind::Idle | AssistantEventKind::Working => {
+            None
+        }
+    };
+    if let Some(what) = desk {
+        hold::desk(agent, &key, &session, what);
+    }
     let decision = agent
         .assistants
         .tracker()
@@ -69,7 +106,9 @@ pub fn event(
                     .assistants
                     .tracker()
                     .wait_over(&key, &session, mark, now_ms());
-                if let Some(alert) = alert {
+                // The phone was asked already, with its own push.
+                let asked = agent.assistants.approvals.waiting_in(&key, &session);
+                if let Some(alert) = alert.filter(|_| !asked) {
                     send(&agent, &name, alert).await;
                 }
             });

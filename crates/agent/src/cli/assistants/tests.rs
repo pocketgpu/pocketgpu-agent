@@ -17,8 +17,9 @@ fn connect_then_disconnect_leaves_every_file_as_it_was() {
     assert_eq!(asked, 0, "--yes doesn't ask");
     assert!(report.alerts);
     assert!(report.changes.iter().all(|c| c.ok), "{text}");
-    // Tools, skill and alerts for each, with the shared skill written once.
-    assert_eq!(report.changes.len(), 8, "{text}");
+    // Tools, skill and alerts for each, with the shared skill written once, Claude Code's
+    // answers from the phone and "Ask me first" for Claude Code and Cursor.
+    assert_eq!(report.changes.len(), 11, "{text}");
     assert!(
         text.contains("Found Claude Code, Codex and Cursor."),
         "{text}"
@@ -44,13 +45,15 @@ fn settings_name_this_program_by_its_full_path() {
     let cursor = env.json(&env.places.cursor_dir.join("mcp.json"));
     assert_eq!(
         cursor["mcpServers"]["pocketgpu"],
-        json!({ "command": exe, "args": ["mcp"] })
+        json!({ "command": exe, "args": ["mcp", "--assistant", "cursor"] })
     );
     let calls = env.fake.calls.borrow().join("\n");
     assert!(calls.contains(&format!(
-        "claude mcp add --scope user pocketgpu -- {exe} mcp"
+        "claude mcp add --scope user pocketgpu -- {exe} mcp --assistant claude"
     )));
-    assert!(calls.contains(&format!("codex mcp add pocketgpu -- {exe} mcp")));
+    assert!(calls.contains(&format!(
+        "codex mcp add pocketgpu -- {exe} mcp --assistant codex"
+    )));
     let claude = env.json(&env.places.claude_dir.join("settings.json"));
     for event in ["UserPromptSubmit", "Notification", "Stop", "PostToolUse"] {
         let hook = claude["hooks"][event].as_array().unwrap().last().unwrap()["hooks"][0].clone();
@@ -126,10 +129,10 @@ fn connecting_again_changes_nothing() {
     assert_eq!(env.read(&env.places.manifest()), manifest);
     let ctx_manifest = Manifest::load(&env.places).unwrap();
     let all = super::statuses(&env.ctx(&ctx_manifest)).unwrap();
-    assert!(
-        all.iter().all(|s| s.found && s.mcp && s.skill && s.hooks),
-        "{all:?}"
-    );
+    // Gemini CLI isn't in this home (see tests_gemini.rs).
+    let here: Vec<_> = all.iter().filter(|s| s.found).collect();
+    assert_eq!(here.len(), 3, "{all:?}");
+    assert!(here.iter().all(|s| s.mcp && s.skill && s.hooks), "{all:?}");
 }
 
 #[test]
@@ -152,13 +155,13 @@ fn a_dry_run_only_shows() {
     assert!(text.contains("Nothing was changed (--dry-run)."));
     assert_eq!(snapshot(&env.places.home), before);
     assert!(!env.places.data_dir.exists());
-    // Only `claude plugin list`: nothing that changes anything ran.
+    // Only `claude plugin list` and `--version`: nothing that changes anything ran.
     assert!(
         env.fake
             .calls
             .borrow()
             .iter()
-            .all(|c| c.contains("plugin list"))
+            .all(|c| c.contains("plugin list") || c.ends_with("--version"))
     );
 }
 
@@ -172,11 +175,13 @@ fn alerts_wait_for_a_yes() {
     assert!(!report.alerts);
     assert!(report.changes.iter().all(|c| c.part != Part::Hooks));
     assert!(text.contains("No alerts for now"), "{text}");
-    assert!(!env.places.cursor_dir.join("hooks.json").exists());
-    assert_eq!(
-        env.read(&env.places.claude_dir.join("settings.json")),
-        SETTINGS
-    );
+    // Only the answers hooks, which do nothing until their switches are on.
+    let cursor = env.json(&env.places.cursor_dir.join("hooks.json"));
+    let hooks: Vec<&String> = cursor["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(hooks, ["beforeMCPExecution", "beforeShellExecution"]);
+    let claude = env.json(&env.places.claude_dir.join("settings.json"));
+    let hooks: Vec<&String> = claude["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(hooks, ["PermissionRequest", "PreToolUse", "Stop"]);
     // Asked again next time, and a yes adds only the alerts.
     let (report, _, asked) = env.connect(opts, true);
     assert_eq!(asked, 1);
@@ -190,17 +195,23 @@ fn the_claude_code_plugin_covers_claude_code() {
     env.fake.plugins = r#"[{"id": "pocketgpu@pocketgpu", "enabled": true}]"#.into();
     let (report, text, _) = env.connect(YES, true);
     let report = report.unwrap();
-    assert!(
-        report
-            .changes
-            .iter()
-            .all(|c| c.assistant != Assistant::Claude),
-        "{text}"
-    );
-    assert_eq!(
-        env.read(&env.places.claude_dir.join("settings.json")),
-        SETTINGS
-    );
+    // Only the `--check` hook, with the full path: the plugin can't carry a blocking hook
+    // with a bare `pgpu` that may not start.
+    let claude: Vec<Part> = report
+        .changes
+        .iter()
+        .filter(|c| c.assistant == Assistant::Claude)
+        .map(|c| c.part)
+        .collect();
+    assert_eq!(claude, [Part::Approvals], "{text}");
+    let settings = env.json(&env.places.claude_dir.join("settings.json"));
+    let check = &settings["hooks"]["PreToolUse"][0];
+    assert_eq!(check["matcher"], super::claude_approvals::CHECK_MATCHER);
+    let line = check["hooks"][0]["command"].as_str().unwrap_or_default();
+    let full = check["hooks"][0]["command"] == json!(env.exe)
+        || line.contains(&*env.exe.to_string_lossy());
+    assert!(full && line != "pgpu hook claude --check", "{check}");
+    assert!(settings["hooks"].get("PermissionRequest").is_none());
     assert!(!env.places.claude_dir.join("skills").exists());
     assert!(
         !env.fake
@@ -295,4 +306,86 @@ fn an_older_skill_of_ours_is_brought_up_to_date() {
     // A skill of the user's own with the name is left alone.
     std::fs::write(&path, "mine").unwrap();
     assert!(env.connect(YES, true).0.unwrap().changes.is_empty());
+}
+
+#[test]
+fn claude_code_gets_answers_from_the_phone_in_their_own_step() {
+    let env = env(&["claude", "codex"]);
+    let before = snapshot(&env.places.home);
+    let (report, text, _) = env.connect(YES, true);
+    let report = report.unwrap();
+    let approvals: Vec<_> = report
+        .changes
+        .iter()
+        .filter(|c| c.part == Part::Approvals && c.assistant == Assistant::Claude)
+        .collect();
+    assert_eq!(approvals.len(), 2, "{text}");
+    assert!(text.contains("answers from your phone"), "{text}");
+    let claude = env.json(&env.places.claude_dir.join("settings.json"));
+    let groups = claude["hooks"]["PermissionRequest"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert!(groups[0].get("matcher").is_none());
+    let hook = &groups[0]["hooks"][0];
+    assert!(
+        hooks::is_ours_as(hook, "claude", hooks::Mode::Ask),
+        "{hook}"
+    );
+    assert!(!hooks::is_ours(hook, "claude"));
+    assert_eq!(hook["timeout"], 330);
+    assert!(hook.get("async").is_none() && hook.get("onFailure").is_none());
+    // The week-1 hooks gained PostToolUseFailure, as plain alert hooks.
+    let failed = &claude["hooks"]["PostToolUseFailure"][0]["hooks"][0];
+    assert!(hooks::is_ours(failed, "claude") && failed["async"] == true);
+    // The manifest records it on its own, and status sees it.
+    let manifest = Manifest::load(&env.places).unwrap();
+    assert_eq!(
+        manifest
+            .changes
+            .iter()
+            .filter(|r| r.part == Part::Approvals && r.assistant == Assistant::Claude)
+            .count(),
+        2
+    );
+    let all = super::statuses(&env.ctx(&manifest)).unwrap();
+    let claude_status = all
+        .iter()
+        .find(|s| s.assistant == Assistant::Claude)
+        .unwrap();
+    assert!(claude_status.ask && claude_status.check);
+    assert!(
+        all.iter()
+            .filter(|s| s.assistant != Assistant::Claude)
+            .all(|s| !s.ask)
+    );
+    assert!(super::list_words(&all).contains("answers ✓"));
+    // Disconnect takes back exactly it, with everything else.
+    env.disconnect();
+    assert_eq!(snapshot(&env.places.home), before);
+}
+
+#[test]
+fn a_week_one_connection_gets_only_the_missing_approval_step() {
+    let env = env(&["claude", "codex"]);
+    env.connect(YES, true).0.unwrap();
+    // As week 1 left it: no PermissionRequest hook, and no record of one.
+    let path = env.places.claude_dir.join("settings.json");
+    let mut v = env.json(&path);
+    v["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("PermissionRequest");
+    std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let mut manifest = Manifest::load(&env.places).unwrap();
+    manifest.changes.retain(|r| r.part != Part::Approvals);
+    manifest.save(&env.places).unwrap();
+    let all = super::statuses(&env.ctx(&manifest)).unwrap();
+    assert!(super::list_words(&all).contains("Connect them"));
+    let (report, text, asked) = env.connect(YES, true);
+    let parts: Vec<Part> = report.unwrap().changes.iter().map(|c| c.part).collect();
+    assert_eq!(parts, [Part::Approvals], "{text}");
+    assert_eq!(asked, 0);
+    let back = env.disconnect();
+    assert!(back.changes.iter().all(|c| c.ok), "{:?}", back.changes);
+    let v = env.json(&path);
+    assert!(v["hooks"].get("PermissionRequest").is_none(), "{v}");
 }
